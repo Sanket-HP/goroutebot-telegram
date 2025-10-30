@@ -1,126 +1,125 @@
 // Import the libraries we installed
 const express = require('express');
 const axios = require('axios');
-const { google } = require('googleapis'); // <-- ADDED
+const { google } = require('googleapis'); // <-- We need this
 
 // Your bot's configuration (keep these secret!)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; // This is set in Vercel
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
-// --- ADDED NEW CONFIG ---
+// --- Google Sheets Config ---
 const SPREADSHEET_ID = "1784I1ppOyNHgYc98ZKxKOBU3RFWjNwpgiI5dJWQD8Ro"; // Your Sheet ID
+// This line will crash if GOOGLE_SHEETS_CREDS is not in Vercel!
 const GOOGLE_SHEETS_CREDS = JSON.parse(process.env.GOOGLE_SHEETS_CREDS);
-// --- END NEW CONFIG ---
+// --- END Config ---
 
 // --- MESSAGES ---
-// Translated from your Apps Script MESSAGES object
 const MESSAGES = {
+  // Updated help message for the new button menu
   help: `🆘 *GoRoute Help Center*
 
-*Booking Commands:*
-• *Book bus* - Start bus search
-• *Show seats BUS101* - View seat map
-• *Book seat BUS101 3A* - Book specific seat
-• *My booking* - View your tickets
-• *Cancel booking BOOK123* - Cancel booking
-
-*Information Commands:*
-• *My profile* - Your account details
-• *Live tracking BUS101* - Track bus location
-• *Status* - System status
-• */language* - Change language
-
-💡 *Quick start:* Type "Book bus" to begin your journey!`,
+Select an option from the menu below to get started. You can also type commands like "book bus".`,
   no_buses: "❌ *No buses available matching your criteria.*\n\nPlease check back later or try different routes.",
   specify_bus_id: '❌ Please specify the Bus ID.\nExample: "Show seats BUS101"',
   seat_map_error: '❌ Error generating seat map for {busID}.',
+  no_seats_found: '❌ No seats found in the system for bus {busID}.',
   feature_wip: '🚧 This feature is coming soon!',
-  welcome_back: '👋 Welcome back, {name}! Type "help" to see available commands.',
-  unknown_command: `🤖 Sorry, I didn't understand that.\n\nTry:\n"book bus"\n"my booking"\n"help"`,
+  welcome_back: '👋 Welcome back, {name}!',
+  registration_success: '🎉 Welcome to GoRoute, {name}! Your account is created. Type "book bus" to start.',
+  unknown_command: `🤖 Sorry, I didn't understand that.\n\nType /help to see the main menu.`,
+  user_not_found: "❌ User not found. Please send /start to register.",
+  general_error: "❌ Sorry, I encountered an error. Please try again or type /help."
 };
 
 // Create the server
 const app = express();
-// This line is important! It parses the JSON data from Telegram
 app.use(express.json());
 
 // This is your webhook. Telegram will send all updates here.
 app.post('/api/webhook', async (req, res) => {
   const update = req.body;
-  
-  // Log the incoming message (you can check this in the Vercel logs)
   console.log('Received update:', JSON.stringify(update, null, 2));
 
   try {
-    // Check if it's a message and has text
     if (update.message && update.message.text) {
       const message = update.message;
       const chatId = message.chat.id;
       const text = message.text ? message.text.trim() : '';
       const user = message.from;
       
-      // Tell Telegram "Bot is typing..."
-      // We don't wait for this, just send it.
       sendChatAction(chatId, "typing");
-
-      // Handle the user's message
       await handleUserMessage(chatId, text, user);
     
     } else if (update.callback_query) {
-      // Handle button clicks
+      // --- NEW: Handle button clicks ---
       const callback = update.callback_query;
       const chatId = callback.message.chat.id;
+      const user = callback.from;
       const callbackData = callback.data;
       
-      // 1. Answer the callback immediately to remove "loading"
+      // 1. Answer the callback immediately
       await answerCallbackQuery(callback.id);
-
-      // 2. Tell Telegram "Bot is typing..."
+      // 2. Show "typing..."
       sendChatAction(chatId, "typing");
 
-      // 3. Handle the logic
-      if (callbackData.startsWith('lang_')) {
+      // 3. Route the button click
+      if (callbackData === 'cb_book_bus') {
+        await handleBusSearch(chatId);
+      } else if (callbackData === 'cb_my_booking') {
+        await handleBookingInfo(chatId);
+      } else if (callbackData === 'cb_my_profile') {
+        await handleUserProfile(chatId);
+      } else if (callbackData === 'cb_help') {
+        // Re-send the help menu
+        await sendHelpMessage(chatId);
+      } else if (callbackData.startsWith('lang_')) {
         await handleSetLanguage(chatId, callbackData.split('_')[1]);
       }
+      // --- END NEW ---
     }
   } catch (error) {
     console.error("Error in main handler:", error.message);
   }
 
   // Finally, send an "OK" response to Telegram
-  // This tells Telegram "I got the message, don't send it again."
-  // This is what stops the retry-storm!
   res.status(200).send('OK');
 });
 
 
-/* --------------------- Message Router (FIXED) ---------------------- */
+/* --------------------- Message Router ---------------------- */
 async function handleUserMessage(chatId, text, user) {
   console.log(`Routing message: "${text}"`);
   
   const textLower = text.toLowerCase().trim();
+
+  // The /start command is now a REAL, (slower) database function.
+  if (textLower === '/start') {
+    await startUserRegistration(chatId, user); // Pass the full user object
+    return; // Stop processing
+  }
+
+  // Handle /help separately to show the button menu
+  if (textLower === 'help' || textLower === '/help') {
+    console.log("✅ Handling help command");
+    await sendHelpMessage(chatId);
+    return;
+  }
+
+  // --- All other text commands ---
   const userName = user.first_name || 'User';
 
-  // All commands are fast (mocked or WIP)
-  if (textLower === '/start') {
-    await startUserRegistration(chatId, userName);
-  }
-  else if (textLower === 'book bus' || textLower === '/book') {
+  if (textLower === 'book bus' || textLower === '/book') {
     console.log("✅ Handling book bus command");
     await handleBusSearch(chatId);
   }
   else if (textLower.startsWith('show seats')) {
-    await handleSeatMap(chatId, text);
+    await handleSeatMap(chatId, text); // This is now a REAL function
   }
   else if (textLower.startsWith('book seat')) {
     await handleSeatSelection(chatId, text);
   }
   else if (textLower === '/language' || textLower === 'language') {
     await handleLanguageSelection(chatId);
-  }
-  else if (textLower === 'help' || textLower === '/help') {
-    console.log("✅ Handling help command");
-    await sendHelpMessage(chatId);
   }
   else if (textLower === 'status' || textLower === '/status') {
     await handleSystemStatus(chatId);
@@ -132,7 +131,7 @@ async function handleUserMessage(chatId, text, user) {
     await handleCancellation(chatId, text);
   }
   else if (textLower === 'my profile' || textLower === '/profile') {
-    await handleUserProfile(chatId); // <-- THIS IS NOW THE REAL FUNCTION
+    await handleUserProfile(chatId); // This is the REAL function
   }
   else if (textLower.startsWith('live tracking')) {
     await handleLiveTracking(chatId, text);
@@ -148,19 +147,79 @@ async function handleUserMessage(chatId, text, user) {
 
 /* --------------------- Specific Command Handlers ---------------------- */
 
-// This function is FAST (mocked).
-async function startUserRegistration(chatId, userName) {
-  console.log(`Welcoming user: ${userName} (${chatId})`);
+// --- THIS IS THE NEW, REAL /start FUNCTION ---
+async function startUserRegistration(chatId, user) {
+  const userName = user.first_name + (user.last_name ? ' ' + user.last_name : '');
+  // Note: Telegram does not provide phone number by default.
+  // The user must click a "Share Phone" button, which we can add later.
+  const userPhone = ''; 
+  console.log(`Registering user: ${userName} (${chatId})`);
+  
   try {
-    // In a real app, you would now use getGoogleSheetsClient()
-    // to find the user or add them to the 'Users' sheet.
-    // For now, we still just send the welcome.
-    await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
+    const sheets = await getGoogleSheetsClient();
+    
+    // 1. Check if user exists
+    const getRes = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Users!C:C', // Only check the ChatID column
+    });
+
+    const chatIds = getRes.data.values;
+    let userFound = false;
+    if (chatIds) {
+      // .some checks if any row in the array meets the condition
+      userFound = chatIds.some(row => row[0] === String(chatId));
+    }
+
+    // 2. If user exists, just welcome them
+    if (userFound) {
+      console.log(`User ${chatId} already exists.`);
+      await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', user.first_name || 'User'));
+    
+    } else {
+      // 3. If user is new, add them to the sheet
+      console.log(`Creating new user for ${chatId}`);
+      const userId = 'USER' + Date.now();
+      const joinDate = new Date().toISOString();
+      // Schema: UserID, Name, ChatID, Phone, Status, JoinDate, Role, Lang
+      const newRow = [
+        userId,         // A: UserID
+        userName,       // B: Name
+        String(chatId), // C: ChatID
+        userPhone,      // D: Phone
+        'active',       // E: Status
+        joinDate,       // F: JoinDate
+        'user',         // G: Role (default)
+        'en'            // H: Lang (default)
+      ];
+      
+      await sheets.spreadsheets.values.append({
+        spreadsheetId: SPREADSHEET_ID,
+        range: 'Users!A1',
+        valueInputOption: 'USER_ENTERED',
+        resource: {
+          values: [newRow],
+        },
+      });
+      
+      await sendMessage(chatId, MESSAGES.registration_success.replace('{name}', user.first_name || 'User'));
+    }
+    
+    // 4. Always send help menu with buttons
     await sendHelpMessage(chatId);
+
   } catch (error) {
     console.error('❌ Registration error:', error.message);
+    if (error.message.includes("key")) {
+       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot's server is not configured correctly (missing API key). Please contact support.");
+    } else if (error.message.includes("permission")) {
+       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot does not have permission to access the database. Please contact support.");
+    } else {
+       await sendMessage(chatId, "❌ Sorry, I encountered an error during registration.");
+    }
   }
 }
+// --- END OF NEW /start FUNCTION ---
 
 // This function is FAST (sends a keyboard).
 async function handleLanguageSelection(chatId) {
@@ -179,20 +238,35 @@ async function handleSetLanguage(chatId, language) {
   await sendMessage(chatId, MESSAGES.feature_wip);
 }
 
-// This function is FAST (sends text).
+// --- NEW: SENDS BUTTON MENU ---
 async function sendHelpMessage(chatId) {
-  await sendMessage(chatId, MESSAGES.help, "Markdown");
+  const keyboard = {
+    inline_keyboard: [
+      [
+        { text: "🚌 Book a Bus", callback_data: "cb_book_bus" }
+      ],
+      [
+        { text: "🎫 My Bookings", callback_data: "cb_my_booking" },
+        { text: "👤 My Profile", callback_data: "cb_my_profile" }
+      ],
+      [
+        { text: "ℹ️ Help / Status", callback_data: "cb_status" }
+      ]
+    ]
+  };
+  await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
 }
+// --- END NEW ---
 
 // This function is FAST (WIP).
 async function handleSystemStatus(chatId) {
   await sendMessage(chatId, MESSAGES.feature_wip);
 }
 
-// This function is FAST (mocked).
+// This function is FAST (mocked for now).
 async function handleBusSearch(chatId) {
   try {
-    console.log("🔄 Starting bus search...");
+    console.log("🔄 Starting bus search (Mocked)...");
     const buses = getAvailableBuses(); // Mocked data
     
     if (!buses || buses.length === 0) {
@@ -223,7 +297,7 @@ async function handleBusSearch(chatId) {
   }
 }
 
-// This function is FAST (mocked).
+// --- THIS IS THE NEW, REAL "Show Seats" FUNCTION ---
 async function handleSeatMap(chatId, text) {
   try {
     const busMatch = text.match(/(BUS\d+)/i);
@@ -234,7 +308,73 @@ async function handleSeatMap(chatId, text) {
       return;
     }
     
-    const seatMap = generateSeatMap(busID); // Mocked data
+    console.log(`Fetching REAL seat map for ${busID}`);
+    const sheets = await getGoogleSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Seats!A:F', // Schema: A:BusID, B:SeatNo, F:Status
+    });
+
+    const allSeats = response.data.values;
+    if (!allSeats) {
+      await sendMessage(chatId, MESSAGES.seat_map_error.replace('{busID}', busID), "Markdown");
+      return;
+    }
+
+    // Filter seats for the requested bus
+    const busSeats = allSeats.filter(row => row[0] === busID);
+    if (busSeats.length === 0) {
+      await sendMessage(chatId, MESSAGES.no_seats_found.replace('{busID}', busID), "Markdown");
+      return;
+    }
+
+    // Get mocked bus info for header (From, To, Time)
+    const busInfo = getBusInfo(busID) || { from: 'N/A', to: 'N/A', date: 'N/A', time: 'N/A' };
+
+    let seatMap = `🚍 *Seat Map - ${busID}*\n`;
+    seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
+    seatMap += `🕒 ${busInfo.date} ${busInfo.time}\n\n`;
+    seatMap += `Legend: 🟩 Available • ⚫ Booked\n\n`;
+
+    // Build a dictionary for fast lookup
+    let availableCount = 0;
+    const seatStatus = {};
+    busSeats.forEach(row => {
+      const seatNo = row[1]; // e.g., "1A"
+      const status = row[5]; // e.g., "available"
+      seatStatus[seatNo] = status;
+      if (status === 'available') availableCount++;
+    });
+
+    // Loop and build the visual map
+    // This assumes a 10-row, 4-col (A,B,C,D) layout
+    for (let row = 1; row <= 10; row++) {
+      let line = '';
+      for (let col of ['A', 'B', 'C', 'D']) {
+        const seatNo = `${row}${col}`;
+        const status = seatStatus[seatNo];
+        
+        if (status === 'available') {
+          line += '🟩'; // Available
+        } else if (status === 'booked' || status === 'locked') {
+          line += '⚫'; // Booked
+        } else {
+          line += '⬜️'; // Not found in sheet
+        }
+        
+        if (col === 'B') {
+          line += ` ${seatNo}     🚌    `; // Aisle
+        } else {
+          line += ` ${seatNo} `;
+        }
+      }
+      seatMap += line + '\n';
+    }
+    
+    seatMap += `\n📊 *${availableCount}* seats available / ${busSeats.length}\n\n`;
+    seatMap += `💡 *Book a seat:* "Book seat ${busID} SEAT_NUMBER"\n`;
+    seatMap += ` Example: "Book seat ${busID} 1A"`;
+
     await sendMessage(chatId, seatMap, "Markdown");
     
   } catch (error) {
@@ -242,9 +382,7 @@ async function handleSeatMap(chatId, text) {
     await sendMessage(chatId, MESSAGES.seat_map_error.replace('{busID}', 'specified bus'), "Markdown");
   }
 }
-
-// All functions below are "Work in Progress" because they
-// would require a real, slow database call.
+// --- END OF REAL FUNCTION ---
 
 async function handleSeatSelection(chatId, text) {
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
@@ -259,14 +397,14 @@ async function handleCancellation(chatId, text) {
 }
 
 
-// --- THIS IS THE NEW, REAL FUNCTION ---
+// --- THIS IS THE UPDATED "My Profile" FUNCTION ---
 async function handleUserProfile(chatId) {
   console.log(`Fetching profile for ${chatId}`);
   try {
     const sheets = await getGoogleSheetsClient();
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Users!A:H', // Get all columns from the 'Users' sheet
+      range: 'Users!A:H', // Schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Status, F:JoinDate, G:Role, H:Lang
     });
 
     const rows = response.data.values;
@@ -280,48 +418,54 @@ async function handleUserProfile(chatId) {
 
     if (userRow) {
       // Found the user!
-      // Col: UserID(0), Name(1), ChatID(2), Email(3), Status(4), JoinDate(5), Role(6), Lang(7)
       const profile = {
         name: userRow[1] || 'N/A',
         userId: userRow[0] || 'N/A',
         chatId: userRow[2],
-        email: userRow[3] || 'Not set',
+        phone: userRow[3] || 'Not set', // Added Phone
+        status: userRow[4] || 'N/A',
+        joinDate: userRow[5] ? new Date(userRow[5]).toLocaleDateString('en-IN') : 'N/A',
         role: userRow[6] || 'user',
-        language: userRow[7] || 'en',
-        joinDate: userRow[5] ? new Date(userRow[5]).toLocaleDateString('en-IN') : 'N/A'
+        language: userRow[7] || 'en'
       };
       
       let profileText = `👤 *Your Profile*\n\n`;
       profileText += `*Name:* ${profile.name}\n`;
-      profileText += `*User ID:* ${profile.userId}\n`;
       profileText += `*Chat ID:* ${profile.chatId}\n`;
-      profileText += `*Email:* ${profile.email}\n`;
+      profileText += `*Phone:* ${profile.phone}\n`;
       profileText += `*Role:* ${profile.role}\n`;
-      profileText += `*Language:* ${profile.language}\n`;
+      profileText += `*Status:* ${profile.status}\n`;
       profileText += `*Member since:* ${profile.joinDate}`;
       
       await sendMessage(chatId, profileText, "Markdown");
 
     } else {
       // User not found in the sheet
-      await sendMessage(chatId, "❌ User not found. Please send /start to register.");
+      await sendMessage(chatId, MESSAGES.user_not_found);
     }
 
   } catch (error) {
     console.error('❌ Error in handleUserProfile:', error.message);
-    await sendMessage(chatId, "❌ Sorry, I encountered an error trying to find your profile.");
+    if (error.message.includes("key")) {
+       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot's server is not configured correctly (missing API key). Please contact support.");
+    } else if (error.message.includes("permission")) {
+       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot does not have permission to access the database. Please contact support.");
+    } else {
+      await sendMessage(chatId, MESSAGES.general_error);
+    }
   }
 }
-// --- END OF NEW FUNCTION ---
+// --- END OF UPDATED FUNCTION ---
 
 async function handleLiveTracking(chatId, text) {
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
-/* --------------------- Mock Data Functions (FAST) ---------------------- */
-// These are translated from your Apps Script
+/* --------------------- Mock Data Functions (Still Used) ---------------------- */
 
 function getAvailableBuses() {
+  // This is still mocked.
+  // TODO: Read this from 'Buses' sheet just like we read from 'Seats'.
   console.log("Building NEW buses list from SAMPLE data (Fast Path)");
   return [
     {
@@ -334,7 +478,7 @@ function getAvailableBuses() {
       price: 450,
       busType: "AC Sleeper",
       rating: 4.2,
-      availableSeats: 15
+      availableSeats: 15 // This is mocked
     },
     {
       busID: "BUS102", 
@@ -346,12 +490,13 @@ function getAvailableBuses() {
       price: 380,
       busType: "Non-AC Seater",
       rating: 4.0,
-      availableSeats: 8
+      availableSeats: 8 // This is mocked
     }
   ];
 }
 
 function getBusInfo(busID) {
+  // This is still mocked.
   if(!busID) return null;
   const allBuses = getAvailableBuses();
   const bus = allBuses.find(b => b.busID === busID);
@@ -369,36 +514,15 @@ function getBusInfo(busID) {
   return null; // Bus not found
 }
 
-function generateSeatMap(busID) {
-  const busInfo = getBusInfo(busID) || { from: 'N/A', to: 'N/A', date: 'N/A', time: 'N/A' };
-
-  let seatMap = `🚍 *Seat Map - ${busID}*\n`;
-  seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
-  seatMap += `🕒 ${busInfo.date} ${busInfo.time}\n\n`;
-  seatMap += `Legend: L 🟩 Available • ⚫ Booked\n\n`;
-  
-  // This is a static, mocked map
-  seatMap += `🟩1A 🟩1B     🚌     🟩1C 🟩1D\n`;
-  seatMap += `🟩2A 🟩2B ...       🟩2C 🟩2D\n`;
-  seatMap += `⚫3A 🟩3B           🟩3C ⚫3D\n`;
-  seatMap += `🟩4A 🟩4B           🟩4C 🟩4D\n`;
-  seatMap += `🟩5A ⚫5B           🟩5C 🟩5D\n`;
-  
-  seatMap += `\n📊 *37* seats available / 40\n\n`; // This is mocked
-  seatMap += `💡 *Book a seat:* "Book seat ${busID} SEAT_NUMBER"\n`;
-  seatMap += `   Example: "Book seat ${busID} 1A"`;
-  
-  return seatMap;
-}
-
-/* --------------------- NEW Google Sheets Helper ---------------------- */
+/* --------------------- Google Sheets Helper ---------------------- */
 
 async function getGoogleSheetsClient() {
+  // This function uses the GOOGLE_SHEETS_CREDS from Vercel
   const auth = new google.auth.JWT(
     GOOGLE_SHEETS_CREDS.client_email,
     null,
     GOOGLE_SHEETS_CREDS.private_key,
-    ['https://www.googleapis.com/auth/spreadsheets'] // <-- FIXED
+    ['https://www.googleapis.com/auth/spreadsheets']
   );
 
   // Make sure the client is authenticated
@@ -411,7 +535,7 @@ async function getGoogleSheetsClient() {
 
 /* --------------------- Helper Functions (axios) ---------------------- */
 
-// Helper function to send a message (replaces your `sendMessage`)
+// Helper function to send a message
 async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
   console.log(`Sending message to ${chatId}`);
   try {
@@ -431,7 +555,7 @@ async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
   }
 }
 
-// Helper function to send "typing..." (replaces `sendChatAction`)
+// Helper function to send "typing..."
 async function sendChatAction(chatId, action) {
   try {
     await axios.post(`${TELEGRAM_API}/sendChatAction`, {
@@ -443,10 +567,11 @@ async function sendChatAction(chatId, action) {
   }
 }
 
-// Helper function to answer callbacks (replaces `answerCallbackQuery`)
+// Helper function to answer callbacks
 async function answerCallbackQuery(callbackQueryId) {
   try {
-    await axios.post(`${TELEGETELEGRAM_API}/answerCallbackQuery`, {
+    // --- BUG FIX: Was TELEGETELEGRAM_API ---
+    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
       callback_query_id: callbackQueryId,
     });
   } catch (error) {
@@ -454,7 +579,6 @@ async function answerCallbackQuery(callbackQueryId) {
   }
 }
 
-// Start the server (Vercel handles this automatically)
-// But for this file to be complete, we must export the app
+// Start the server
 module.exports = app;
 
