@@ -1,10 +1,16 @@
 // Import the libraries we installed
 const express = require('express');
 const axios = require('axios');
+const { google } = require('googleapis'); // <-- ADDED
 
 // Your bot's configuration (keep these secret!)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; // This is set in Vercel
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
+// --- ADDED NEW CONFIG ---
+const SPREADSHEET_ID = "1784I1ppOyNHgYc98ZKxKOBU3RFWjNwpgiI5dJWQD8Ro"; // Your Sheet ID
+const GOOGLE_SHEETS_CREDS = JSON.parse(process.env.GOOGLE_SHEETS_CREDS);
+// --- END NEW CONFIG ---
 
 // --- MESSAGES ---
 // Translated from your Apps Script MESSAGES object
@@ -126,7 +132,7 @@ async function handleUserMessage(chatId, text, user) {
     await handleCancellation(chatId, text);
   }
   else if (textLower === 'my profile' || textLower === '/profile') {
-    await handleUserProfile(chatId);
+    await handleUserProfile(chatId); // <-- THIS IS NOW THE REAL FUNCTION
   }
   else if (textLower.startsWith('live tracking')) {
     await handleLiveTracking(chatId, text);
@@ -146,6 +152,9 @@ async function handleUserMessage(chatId, text, user) {
 async function startUserRegistration(chatId, userName) {
   console.log(`Welcoming user: ${userName} (${chatId})`);
   try {
+    // In a real app, you would now use getGoogleSheetsClient()
+    // to find the user or add them to the 'Users' sheet.
+    // For now, we still just send the welcome.
     await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
     await sendHelpMessage(chatId);
   } catch (error) {
@@ -249,9 +258,61 @@ async function handleCancellation(chatId, text) {
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
+
+// --- THIS IS THE NEW, REAL FUNCTION ---
 async function handleUserProfile(chatId) {
-  await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
+  console.log(`Fetching profile for ${chatId}`);
+  try {
+    const sheets = await getGoogleSheetsClient();
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Users!A:H', // Get all columns from the 'Users' sheet
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length === 0) {
+      await sendMessage(chatId, "Error: Could not find any users.");
+      return;
+    }
+
+    // Find the user with a matching ChatID in Column C (index 2)
+    const userRow = rows.find(row => row[2] && row[2] === String(chatId));
+
+    if (userRow) {
+      // Found the user!
+      // Col: UserID(0), Name(1), ChatID(2), Email(3), Status(4), JoinDate(5), Role(6), Lang(7)
+      const profile = {
+        name: userRow[1] || 'N/A',
+        userId: userRow[0] || 'N/A',
+        chatId: userRow[2],
+        email: userRow[3] || 'Not set',
+        role: userRow[6] || 'user',
+        language: userRow[7] || 'en',
+        joinDate: userRow[5] ? new Date(userRow[5]).toLocaleDateString('en-IN') : 'N/A'
+      };
+      
+      let profileText = `👤 *Your Profile*\n\n`;
+      profileText += `*Name:* ${profile.name}\n`;
+      profileText += `*User ID:* ${profile.userId}\n`;
+      profileText += `*Chat ID:* ${profile.chatId}\n`;
+      profileText += `*Email:* ${profile.email}\n`;
+      profileText += `*Role:* ${profile.role}\n`;
+      profileText += `*Language:* ${profile.language}\n`;
+      profileText += `*Member since:* ${profile.joinDate}`;
+      
+      await sendMessage(chatId, profileText, "Markdown");
+
+    } else {
+      // User not found in the sheet
+      await sendMessage(chatId, "❌ User not found. Please send /start to register.");
+    }
+
+  } catch (error) {
+    console.error('❌ Error in handleUserProfile:', error.message);
+    await sendMessage(chatId, "❌ Sorry, I encountered an error trying to find your profile.");
+  }
 }
+// --- END OF NEW FUNCTION ---
 
 async function handleLiveTracking(chatId, text) {
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
@@ -314,7 +375,7 @@ function generateSeatMap(busID) {
   let seatMap = `🚍 *Seat Map - ${busID}*\n`;
   seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
   seatMap += `🕒 ${busInfo.date} ${busInfo.time}\n\n`;
-  seatMap += `Legend: 🟩 Available • ⚫ Booked\n\n`;
+  seatMap += `Legend: L 🟩 Available • ⚫ Booked\n\n`;
   
   // This is a static, mocked map
   seatMap += `🟩1A 🟩1B     🚌     🟩1C 🟩1D\n`;
@@ -328,6 +389,23 @@ function generateSeatMap(busID) {
   seatMap += `   Example: "Book seat ${busID} 1A"`;
   
   return seatMap;
+}
+
+/* --------------------- NEW Google Sheets Helper ---------------------- */
+
+async function getGoogleSheetsClient() {
+  const auth = new google.auth.JWT(
+    GOOGLE_SHEETS_CREDS.client_email,
+    null,
+    GOOGLE_SHEETS_CREDS.private_key,
+    ['https://www.googleapis.com/auth/spreadsheets'] // <-- FIXED
+  );
+
+  // Make sure the client is authenticated
+  await auth.authorize();
+  
+  const sheets = google.sheets({ version: 'v4', auth });
+  return sheets;
 }
 
 
@@ -368,7 +446,7 @@ async function sendChatAction(chatId, action) {
 // Helper function to answer callbacks (replaces `answerCallbackQuery`)
 async function answerCallbackQuery(callbackQueryId) {
   try {
-    await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
+    await axios.post(`${TELEGETELEGRAM_API}/answerCallbackQuery`, {
       callback_query_id: callbackQueryId,
     });
   } catch (error) {
@@ -379,3 +457,4 @@ async function answerCallbackQuery(callbackQueryId) {
 // Start the server (Vercel handles this automatically)
 // But for this file to be complete, we must export the app
 module.exports = app;
+
