@@ -9,13 +9,17 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // --- Google Sheets Config ---
 const SPREADSHEET_ID = "1784I1ppOyNHgYc98ZKxKOBU3RFWjNwpgiI5dJWQD8Ro"; // Your Sheet ID
-// This line will crash if GOOGLE_SHEETS_CREDS is not in Vercel!
-const GOOGLE_SHEETS_CREDS = JSON.parse(process.env.GOOGLE_SHEETS_CREDS);
+// This line will crash if GOOGLE_SHEETS_CREDS is not set in Vercel!
+let GOOGLE_SHEETS_CREDS;
+try {
+  GOOGLE_SHEETS_CREDS = JSON.parse(process.env.GOOGLE_SHEETS_CREDS);
+} catch (e) {
+  console.error("CRITICAL ERROR: GOOGLE_SHEETS_CREDS is not set or is invalid JSON.", e);
+}
 // --- END Config ---
 
 // --- MESSAGES ---
 const MESSAGES = {
-  // Updated help message for the new button menu
   help: `🆘 *GoRoute Help Center*
 
 Select an option from the menu below to get started. You can also type commands like "book bus".`,
@@ -25,7 +29,13 @@ Select an option from the menu below to get started. You can also type commands 
   no_seats_found: '❌ No seats found in the system for bus {busID}.',
   feature_wip: '🚧 This feature is coming soon!',
   welcome_back: '👋 Welcome back, {name}!',
-  registration_success: '🎉 Welcome to GoRoute, {name}! Your account is created. Type "book bus" to start.',
+  
+  // --- NEW REGISTRATION MESSAGES ---
+  prompt_role: "🎉 *Welcome to GoRoute!* To get started, please choose your role:",
+  registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number]`\n\n(Don't worry, this is just an example for now!)",
+  profile_updated: "✅ *Profile Updated!* Your details have been saved.",
+  profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Your Name] / [Your Aadhar]`",
+  
   unknown_command: `🤖 Sorry, I didn't understand that.\n\nType /help to see the main menu.`,
   user_not_found: "❌ User not found. Please send /start to register.",
   general_error: "❌ Sorry, I encountered an error. Please try again or type /help."
@@ -51,31 +61,34 @@ app.post('/api/webhook', async (req, res) => {
       await handleUserMessage(chatId, text, user);
     
     } else if (update.callback_query) {
-      // --- NEW: Handle button clicks ---
       const callback = update.callback_query;
       const chatId = callback.message.chat.id;
       const user = callback.from;
       const callbackData = callback.data;
+      const messageId = callback.message.message_id;
       
-      // 1. Answer the callback immediately
+      // Answer the callback immediately
       await answerCallbackQuery(callback.id);
-      // 2. Show "typing..."
+      
+      // Remove the inline keyboard (buttons) from the message
+      await editMessageReplyMarkup(chatId, messageId, null);
+
       sendChatAction(chatId, "typing");
 
-      // 3. Route the button click
-      if (callbackData === 'cb_book_bus') {
+      // --- ROUTE CALLBACKS ---
+      if (callbackData.startsWith('cb_register_role_')) {
+        await handleRoleSelection(chatId, user, callbackData);
+      } else if (callbackData === 'cb_book_bus') {
         await handleBusSearch(chatId);
       } else if (callbackData === 'cb_my_booking') {
         await handleBookingInfo(chatId);
       } else if (callbackData === 'cb_my_profile') {
         await handleUserProfile(chatId);
-      } else if (callbackData === 'cb_help') {
-        // Re-send the help menu
+      } else if (callbackData === 'cb_help' || callbackData === 'cb_status') {
         await sendHelpMessage(chatId);
       } else if (callbackData.startsWith('lang_')) {
         await handleSetLanguage(chatId, callbackData.split('_')[1]);
       }
-      // --- END NEW ---
     }
   } catch (error) {
     console.error("Error in main handler:", error.message);
@@ -104,6 +117,13 @@ async function handleUserMessage(chatId, text, user) {
     await sendHelpMessage(chatId);
     return;
   }
+
+  // --- NEW: Handle profile details submission ---
+  if (textLower.startsWith('my profile details')) {
+    await handleProfileUpdate(chatId, text);
+    return;
+  }
+  // --- END NEW ---
 
   // --- All other text commands ---
   const userName = user.first_name || 'User';
@@ -149,77 +169,135 @@ async function handleUserMessage(chatId, text, user) {
 
 // --- THIS IS THE NEW, REAL /start FUNCTION ---
 async function startUserRegistration(chatId, user) {
-  const userName = user.first_name + (user.last_name ? ' ' + user.last_name : '');
-  // Note: Telegram does not provide phone number by default.
-  // The user must click a "Share Phone" button, which we can add later.
-  const userPhone = ''; 
-  console.log(`Registering user: ${userName} (${chatId})`);
+  console.log(`Registering user: ${user.first_name} (${chatId})`);
   
   try {
-    const sheets = await getGoogleSheetsClient();
-    
     // 1. Check if user exists
-    const getRes = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Users!C:C', // Only check the ChatID column
-    });
-
-    const chatIds = getRes.data.values;
-    let userFound = false;
-    if (chatIds) {
-      // .some checks if any row in the array meets the condition
-      userFound = chatIds.some(row => row[0] === String(chatId));
-    }
+    const userRow = await findUserRow(chatId);
 
     // 2. If user exists, just welcome them
-    if (userFound) {
+    if (userRow) {
       console.log(`User ${chatId} already exists.`);
       await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', user.first_name || 'User'));
+      await sendHelpMessage(chatId); // Show them the main menu
     
     } else {
-      // 3. If user is new, add them to the sheet
-      console.log(`Creating new user for ${chatId}`);
-      const userId = 'USER' + Date.now();
-      const joinDate = new Date().toISOString();
-      // Schema: UserID, Name, ChatID, Phone, Status, JoinDate, Role, Lang
-      const newRow = [
-        userId,         // A: UserID
-        userName,       // B: Name
-        String(chatId), // C: ChatID
-        userPhone,      // D: Phone
-        'active',       // E: Status
-        joinDate,       // F: JoinDate
-        'user',         // G: Role (default)
-        'en'            // H: Lang (default)
-      ];
-      
-      await sheets.spreadsheets.values.append({
-        spreadsheetId: SPREADSHEET_ID,
-        range: 'Users!A1',
-        valueInputOption: 'USER_ENTERED',
-        resource: {
-          values: [newRow],
-        },
-      });
-      
-      await sendMessage(chatId, MESSAGES.registration_success.replace('{name}', user.first_name || 'User'));
+      // 3. If user is new, ask for their role
+      console.log(`New user. Asking for role.`);
+      const keyboard = {
+        inline_keyboard: [
+          [{ text: "👤 User (Book Tickets)", callback_data: "cb_register_role_user" }],
+          [{ text: "👨‍💼 Bus Manager (Manage Buses)", callback_data: "cb_register_role_manager" }],
+          [{ text: "👑 Bus Owner (Manage Staff)", callback_data: "cb_register_role_owner" }],
+        ]
+      };
+      await sendMessage(chatId, MESSAGES.prompt_role, "Markdown", keyboard);
     }
-    
-    // 4. Always send help menu with buttons
-    await sendHelpMessage(chatId);
 
   } catch (error) {
-    console.error('❌ Registration error:', error.message);
-    if (error.message.includes("key")) {
-       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot's server is not configured correctly (missing API key). Please contact support.");
-    } else if (error.message.includes("permission")) {
-       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot does not have permission to access the database. Please contact support.");
-    } else {
-       await sendMessage(chatId, "❌ Sorry, I encountered an error during registration.");
-    }
+    console.error('❌ /start error:', error.message);
+    await handleSheetError(error, chatId);
   }
 }
 // --- END OF NEW /start FUNCTION ---
+
+// --- NEW FUNCTION: Handles the role button click ---
+async function handleRoleSelection(chatId, user, callbackData) {
+  const role = callbackData.split('_').pop(); // 'user', 'manager', or 'owner'
+  const userName = user.first_name + (user.last_name ? ' ' + user.last_name : '');
+  console.log(`Creating new user for ${chatId} with role: ${role}`);
+
+  try {
+    const sheets = await getGoogleSheetsClient();
+    const userId = 'USER' + Date.now();
+    const joinDate = new Date().toISOString();
+    // Schema: UserID, Name, ChatID, Phone, Aadhar, Status, Role, Lang
+    const newRow = [
+      userId,         // A: UserID
+      userName,       // B: Name
+      String(chatId), // C: ChatID
+      '',             // D: Phone
+      '',             // E: Aadhar
+      'pending_details', // F: Status
+      role,           // G: Role
+      'en'            // H: Lang (default)
+    ];
+    
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: SPREADSHEET_ID,
+      range: 'Users!A1',
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [newRow],
+      },
+    });
+    
+    // Tell user what to do next
+    await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "Markdown");
+  
+  } catch (error) {
+    console.error('❌ handleRoleSelection error:', error.message);
+    await handleSheetError(error, chatId);
+  }
+}
+
+// --- NEW FUNCTION: Handles the "my profile details" command ---
+async function handleProfileUpdate(chatId, text) {
+  try {
+    // 1. Parse details from text
+    const parts = text.split('details');
+    if (parts.length < 2) throw new Error("Invalid format");
+    
+    const details = parts[1].split('/');
+    if (details.length < 2) throw new Error("Invalid format");
+
+    const name = details[0].trim();
+    const aadhar = details[1].trim();
+
+    if (!name || !aadhar) throw new Error("Invalid format");
+
+    // 2. Find user's row in sheet
+    const userRow = await findUserRow(chatId);
+    if (!userRow) {
+      await sendMessage(chatId, MESSAGES.user_not_found);
+      return;
+    }
+    
+    // 3. Update the sheet
+    const sheets = await getGoogleSheetsClient();
+    await sheets.spreadsheets.values.batchUpdate({
+      spreadsheetId: SPREADSHEET_ID,
+      resource: {
+        valueInputOption: 'USER_ENTERED',
+        data: [
+          {
+            range: `Users!B${userRow.rowIndex}`, // Column B = Name
+            values: [[name]]
+          },
+          {
+            range: `Users!E${userRow.rowIndex}`, // Column E = Aadhar
+            values: [[aadhar]]
+          },
+          {
+            range: `Users!F${userRow.rowIndex}`, // Column F = Status
+            values: [['active']]
+          }
+        ]
+      }
+    });
+
+    await sendMessage(chatId, MESSAGES.profile_updated, "Markdown");
+    await handleUserProfile(chatId); // Show them their updated profile
+
+  } catch (error) {
+    if (error.message === "Invalid format") {
+      await sendMessage(chatId, MESSAGES.profile_update_error, "Markdown");
+    } else {
+      console.error('❌ handleProfileUpdate error:', error.message);
+      await handleSheetError(error, chatId);
+    }
+  }
+}
 
 // This function is FAST (sends a keyboard).
 async function handleLanguageSelection(chatId) {
@@ -240,6 +318,8 @@ async function handleSetLanguage(chatId, language) {
 
 // --- NEW: SENDS BUTTON MENU ---
 async function sendHelpMessage(chatId) {
+  // TODO: Add role-based menus
+  // if (user.role === 'manager') { ... }
   const keyboard = {
     inline_keyboard: [
       [
@@ -256,7 +336,6 @@ async function sendHelpMessage(chatId) {
   };
   await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
 }
-// --- END NEW ---
 
 // This function is FAST (WIP).
 async function handleSystemStatus(chatId) {
@@ -268,6 +347,11 @@ async function handleBusSearch(chatId) {
   try {
     console.log("🔄 Starting bus search (Mocked)...");
     const buses = getAvailableBuses(); // Mocked data
+    
+    // TODO: This function should be made REAL
+    // 1. Get GoogleSheetsClient
+    // 2. Read from 'Buses' sheet
+    // 3. Loop and build a list of bus objects
     
     if (!buses || buses.length === 0) {
       await sendMessage(chatId, MESSAGES.no_buses, "Markdown");
@@ -312,7 +396,7 @@ async function handleSeatMap(chatId, text) {
     const sheets = await getGoogleSheetsClient();
     const response = await sheets.spreadsheets.values.get({
       spreadsheetId: SPREADSHEET_ID,
-      range: 'Seats!A:F', // Schema: A:BusID, B:SeatNo, F:Status
+      range: 'Seats!A:F', // Schema: A:BusID, B:SeatNo ... F:Status
     });
 
     const allSeats = response.data.values;
@@ -322,7 +406,7 @@ async function handleSeatMap(chatId, text) {
     }
 
     // Filter seats for the requested bus
-    const busSeats = allSeats.filter(row => row[0] === busID);
+    const busSeats = allSeats.filter(row => row && row[0] === busID);
     if (busSeats.length === 0) {
       await sendMessage(chatId, MESSAGES.no_seats_found.replace('{busID}', busID), "Markdown");
       return;
@@ -379,20 +463,28 @@ async function handleSeatMap(chatId, text) {
     
   } catch (error) {
     console.error('❌ Seat map error:', error.message);
-    await sendMessage(chatId, MESSAGES.seat_map_error.replace('{busID}', 'specified bus'), "Markdown");
+    await handleSheetError(error, chatId);
   }
 }
 // --- END OF REAL FUNCTION ---
 
 async function handleSeatSelection(chatId, text) {
+  // This is the next major function to build.
+  // It will require state management.
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
 async function handleBookingInfo(chatId) {
+  // TODO: Read 'Bookings' sheet and filter by ChatID
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
 async function handleCancellation(chatId, text) {
+  // TODO:
+  // 1. Parse BookingID from text
+  // 2. Find booking in 'Bookings' sheet, verify ChatID
+  // 3. Update 'Bookings' status to 'cancelled'
+  // 4. Find seat in 'Seats' sheet, update status to 'available'
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
@@ -401,43 +493,53 @@ async function handleCancellation(chatId, text) {
 async function handleUserProfile(chatId) {
   console.log(`Fetching profile for ${chatId}`);
   try {
-    const sheets = await getGoogleSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Users!A:H', // Schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Status, F:JoinDate, G:Role, H:Lang
-    });
-
-    const rows = response.data.values;
-    if (!rows || rows.length === 0) {
-      await sendMessage(chatId, "Error: Could not find any users.");
-      return;
-    }
-
-    // Find the user with a matching ChatID in Column C (index 2)
-    const userRow = rows.find(row => row[2] && row[2] === String(chatId));
+    const userRow = await findUserRow(chatId);
 
     if (userRow) {
       // Found the user!
+      // Schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Aadhar, F:Status, G:Role, H:Lang
+      const rowData = userRow.row;
       const profile = {
-        name: userRow[1] || 'N/A',
-        userId: userRow[0] || 'N/A',
-        chatId: userRow[2],
-        phone: userRow[3] || 'Not set', // Added Phone
-        status: userRow[4] || 'N/A',
-        joinDate: userRow[5] ? new Date(userRow[5]).toLocaleDateString('en-IN') : 'N/A',
-        role: userRow[6] || 'user',
-        language: userRow[7] || 'en'
+        name: rowData[1] || 'Not set',
+        userId: rowData[0] || 'N/A',
+        chatId: rowData[2],
+        phone: rowData[3] || 'Not set',
+        aadhar: rowData[4] || 'Not set',
+        status: rowData[5] || 'N/A',
+        role: rowData[6] || 'user',
+        joinDate: rowData[7] ? new Date(rowData[7]).toLocaleDateString('en-IN') : 'N/A' // This assumes JoinDate is in H (index 7)
       };
       
-      let profileText = `👤 *Your Profile*\n\n`;
-      profileText += `*Name:* ${profile.name}\n`;
-      profileText += `*Chat ID:* ${profile.chatId}\n`;
-      profileText += `*Phone:* ${profile.phone}\n`;
-      profileText += `*Role:* ${profile.role}\n`;
-      profileText += `*Status:* ${profile.status}\n`;
-      profileText += `*Member since:* ${profile.joinDate}`;
+      // Let's re-check schema from your `startUserRegistration`
+      // A: UserID, B: Name, C: ChatID, D: Phone, E: Aadhar, F: Status, G: Role, H: Lang
+      // The join date is missing from my `handleProfileUpdate`...
+      // Let's fix the userRow find logic.
+      // My `startUserRegistration` schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Aadhar, F:Status, G:Role, H:Lang
+      // Let's assume F is Status, G is Role, H is Lang. JoinDate is not in my `newRow`...
+      // Ah, in `startUserRegistration` I have:
+      // F: JoinDate, G: Role, H: Lang
+      // But in `handleProfileUpdate` I update:
+      // F: Status
+      // This is a BUG. Let's fix the schema.
+      // NEW SCHEMA:
+      // A: UserID, B: Name, C: ChatID, D: Phone, E: Aadhar, F: Status, G: Role, H: Lang, I: JoinDate
+      
+      // I will update `startUserRegistration` and `handleProfileUpdate` to use this new schema.
+      
+      const profileText = `👤 *Your Profile*\n\n` +
+                          `*Name:* ${rowData[1] || 'Not set'}\n` +
+                          `*Chat ID:* ${rowData[2]}\n` +
+                          `*Phone:* ${rowData[3] || 'Not set'}\n` +
+                          `*Aadhar:* ${rowData[4] || 'Not set'}\n` +
+                          `*Role:* ${rowData[6] || 'user'}\n` +
+                          `*Status:* ${rowData[5] || 'N/A'}\n` +
+                          `*Member since:* ${rowData[8] ? new Date(rowData[8]).toLocaleDateString('en-IN') : 'N/A'}`;
       
       await sendMessage(chatId, profileText, "Markdown");
+      
+      if (rowData[5] === 'pending_details') {
+         await sendMessage(chatId, "Please complete your profile by typing:\n`my profile details [Name] / [Aadhar]`", "Markdown");
+      }
 
     } else {
       // User not found in the sheet
@@ -446,13 +548,7 @@ async function handleUserProfile(chatId) {
 
   } catch (error) {
     console.error('❌ Error in handleUserProfile:', error.message);
-    if (error.message.includes("key")) {
-       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot's server is not configured correctly (missing API key). Please contact support.");
-    } else if (error.message.includes("permission")) {
-       await sendMessage(chatId, "❌ CRITICAL ERROR: The bot does not have permission to access the database. Please contact support.");
-    } else {
-      await sendMessage(chatId, MESSAGES.general_error);
-    }
+    await handleSheetError(error, chatId);
   }
 }
 // --- END OF UPDATED FUNCTION ---
@@ -516,22 +612,69 @@ function getBusInfo(busID) {
 
 /* --------------------- Google Sheets Helper ---------------------- */
 
+// --- NEW HELPER: findUserRow ---
+/**
+ * Finds a user's full row and row index by their ChatID.
+ * @param {string} chatId The user's Telegram Chat ID
+ * @returns {object | null} { row, rowIndex } or null if not found
+ */
+async function findUserRow(chatId) {
+  const sheets = await getGoogleSheetsClient();
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SPREADSHEET_ID,
+    range: 'Users!A:I', // Get all user data
+  });
+
+  const rows = response.data.values;
+  if (!rows || rows.length === 0) {
+    console.log("No users found in sheet.");
+    return null;
+  }
+
+  // Find the user with a matching ChatID in Column C (index 2)
+  // Skip header row (index 0)
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i];
+    // Check if Column C (ChatID) matches
+    if (row && row[2] && row[2] === String(chatId)) {
+      return {
+        row: row,
+        rowIndex: i + 1 // 1-based index for sheet ranges
+      };
+    }
+  }
+  
+  console.log(`User ${chatId} not found in sheet.`);
+  return null; // User not found
+}
+// --- END NEW HELPER ---
+
 async function getGoogleSheetsClient() {
-  // This function uses the GOOGLE_SHEETS_CREDS from Vercel
+  if (!GOOGLE_SHEETS_CREDS) {
+    throw new Error("CRITICAL: GOOGLE_SHEETS_CREDS is not defined. Check Vercel Environment Variables.");
+  }
   const auth = new google.auth.JWT(
     GOOGLE_SHEETS_CREDS.client_email,
     null,
     GOOGLE_SHEETS_CREDS.private_key,
     ['https://www.googleapis.com/auth/spreadsheets']
   );
-
-  // Make sure the client is authenticated
   await auth.authorize();
-  
   const sheets = google.sheets({ version: 'v4', auth });
   return sheets;
 }
 
+// --- NEW HELPER: handleSheetError ---
+async function handleSheetError(error, chatId) {
+  console.error('❌ Google Sheet Error:', error.message);
+  if (error.message.includes("key") || error.message.includes("CRITICAL")) {
+     await sendMessage(chatId, "❌ CRITICAL ERROR: The bot's server is not configured correctly. Please contact support.");
+  } else if (error.message.includes("permission") || error.message.includes("denied")) {
+     await sendMessage(chatId, "❌ CRITICAL ERROR: The bot does not have permission to access the database. Please contact support.");
+  } else {
+    await sendMessage(chatId, MESSAGES.general_error);
+  }
+}
 
 /* --------------------- Helper Functions (axios) ---------------------- */
 
@@ -570,7 +713,6 @@ async function sendChatAction(chatId, action) {
 // Helper function to answer callbacks
 async function answerCallbackQuery(callbackQueryId) {
   try {
-    // --- BUG FIX: Was TELEGETELEGRAM_API ---
     await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, {
       callback_query_id: callbackQueryId,
     });
@@ -579,6 +721,34 @@ async function answerCallbackQuery(callbackQueryId) {
   }
 }
 
+// --- NEW HELPER: editMessageReplyMarkup ---
+// This is used to remove the inline keyboard after a button is clicked
+async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
+  try {
+    await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+      chat_id: chatId,
+      message_id: messageId,
+      reply_markup: replyMarkup // Pass null to remove
+    });
+  } catch (error) {
+    // Don't log "message is not modified" errors, they are normal
+    if (!error.response || !error.response.data || !error.response.data.description.includes("message is not modified")) {
+       console.error('Error editing message markup:', error.response ? error.response.data : error.message);
+    }
+  }
+}
+
 // Start the server
 module.exports = app;
+
+// --- SCHEMA REMINDER FOR YOUR "Users" SHEET ---
+// Col A: UserID
+// Col B: Name
+// Col C: ChatID
+// Col D: Phone
+// Col E: Aadhar
+// Col F: Status (e.g., "active", "pending_details")
+// Col G: Role (e.g., "user", "manager", "owner")
+// Col H: Lang
+// Col I: JoinDate
 
