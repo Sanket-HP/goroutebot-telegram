@@ -9,13 +9,7 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // --- Google Sheets Config ---
 const SPREADSHEET_ID = "1784I1ppOyNHgYc98ZKxKOBU3RFWjNwpgiI5dJWQD8Ro"; // Your Sheet ID
-// This line will crash if GOOGLE_SHEETS_CREDS is not set in Vercel!
-let GOOGLE_SHEETS_CREDS;
-try {
-  GOOGLE_SHEETS_CREDS = JSON.parse(process.env.GOOGLE_SHEETS_CREDS);
-} catch (e) {
-  console.error("CRITICAL ERROR: GOOGLE_SHEETS_CREDS is not set or is invalid JSON.", e);
-}
+// We will now load and parse GOOGLE_SHEETS_CREDS inside the helper function
 // --- END Config ---
 
 // --- MESSAGES ---
@@ -624,30 +618,49 @@ async function findUserRow(chatId) {
 }
 // --- END NEW HELPER ---
 
+// --- THIS IS THE FINAL, ROBUST VERSION ---
 async function getGoogleSheetsClient() {
-  if (!GOOGLE_SHEETS_CREDS) {
+  // 1. Get the raw string from Vercel
+  const rawCreds = process.env.GOOGLE_SHEETS_CREDS;
+  if (!rawCreds) {
     throw new Error("CRITICAL: GOOGLE_SHEETS_CREDS is not defined. Check Vercel Environment Variables.");
   }
+
+  let creds;
+  try {
+    // 2. Parse it
+    creds = JSON.parse(rawCreds);
+  } catch (e) {
+    console.error("CRITICAL ERROR: GOOGLE_SHEETS_CREDS is not valid JSON.", e.message);
+    throw new Error("CRITICAL: GOOGLE_SHEETS_CREDS is not valid JSON.");
+  }
   
-  // --- THIS IS THE FIX ---
-  // Vercel's env variables escape newlines. We must un-escape them.
-  const privateKey = GOOGLE_SHEETS_CREDS.private_key.replace(/\\n/g, '\n');
-  // --- END FIX ---
+  // 3. Fix the private key (the \n bug)
+  const privateKey = creds.private_key.replace(/\\n/g, '\n');
   
+  // 4. Authenticate
   const auth = new google.auth.JWT(
-    GOOGLE_SHEETS_CREDS.client_email,
+    creds.client_email,
     null,
-    privateKey, // Use the fixed key
+    privateKey,
     ['https://www.googleapis.com/auth/spreadsheets']
   );
+  
   await auth.authorize();
   const sheets = google.sheets({ version: 'v4', auth });
   return sheets;
 }
+// --- END FINAL VERSION ---
+
 
 // --- NEW HELPER: handleSheetError ---
 async function handleSheetError(error, chatId) {
   console.error('❌ Google Sheet Error:', error.message);
+  // Log the specific Google API error if available
+  if (error.errors) {
+    console.error('Google API Errors:', JSON.stringify(error.errors, null, 2));
+  }
+  
   if (error.message.includes("key") || error.message.includes("CRITICAL")) {
      await sendMessage(chatId, "❌ CRITICAL ERROR: The bot's server is not configured correctly. Please contact support.");
   } else if (error.message.includes("permission") || error.message.includes("denied")) {
