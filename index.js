@@ -211,7 +211,7 @@ async function handleRoleSelection(chatId, user, callbackData) {
     const sheets = await getGoogleSheetsClient();
     const userId = 'USER' + Date.now();
     const joinDate = new Date().toISOString();
-    // Schema: UserID, Name, ChatID, Phone, Aadhar, Status, Role, Lang
+    // Schema: A: UserID, B: Name, C: ChatID, D: Phone, E: Aadhar, F: Status, G: Role, H: Lang, I: JoinDate
     const newRow = [
       userId,         // A: UserID
       userName,       // B: Name
@@ -220,7 +220,8 @@ async function handleRoleSelection(chatId, user, callbackData) {
       '',             // E: Aadhar
       'pending_details', // F: Status
       role,           // G: Role
-      'en'            // H: Lang (default)
+      'en',           // H: Lang (default)
+      joinDate        // I: JoinDate
     ];
     
     await sheets.spreadsheets.values.append({
@@ -497,34 +498,8 @@ async function handleUserProfile(chatId) {
 
     if (userRow) {
       // Found the user!
-      // Schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Aadhar, F:Status, G:Role, H:Lang
+      // Schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Aadhar, F:Status, G:Role, H:Lang, I:JoinDate
       const rowData = userRow.row;
-      const profile = {
-        name: rowData[1] || 'Not set',
-        userId: rowData[0] || 'N/A',
-        chatId: rowData[2],
-        phone: rowData[3] || 'Not set',
-        aadhar: rowData[4] || 'Not set',
-        status: rowData[5] || 'N/A',
-        role: rowData[6] || 'user',
-        joinDate: rowData[7] ? new Date(rowData[7]).toLocaleDateString('en-IN') : 'N/A' // This assumes JoinDate is in H (index 7)
-      };
-      
-      // Let's re-check schema from your `startUserRegistration`
-      // A: UserID, B: Name, C: ChatID, D: Phone, E: Aadhar, F: Status, G: Role, H: Lang
-      // The join date is missing from my `handleProfileUpdate`...
-      // Let's fix the userRow find logic.
-      // My `startUserRegistration` schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Aadhar, F:Status, G:Role, H:Lang
-      // Let's assume F is Status, G is Role, H is Lang. JoinDate is not in my `newRow`...
-      // Ah, in `startUserRegistration` I have:
-      // F: JoinDate, G: Role, H: Lang
-      // But in `handleProfileUpdate` I update:
-      // F: Status
-      // This is a BUG. Let's fix the schema.
-      // NEW SCHEMA:
-      // A: UserID, B: Name, C: ChatID, D: Phone, E: Aadhar, F: Status, G: Role, H: Lang, I: JoinDate
-      
-      // I will update `startUserRegistration` and `handleProfileUpdate` to use this new schema.
       
       const profileText = `👤 *Your Profile*\n\n` +
                           `*Name:* ${rowData[1] || 'Not set'}\n` +
@@ -653,10 +628,16 @@ async function getGoogleSheetsClient() {
   if (!GOOGLE_SHEETS_CREDS) {
     throw new Error("CRITICAL: GOOGLE_SHEETS_CREDS is not defined. Check Vercel Environment Variables.");
   }
+  
+  // --- THIS IS THE FIX ---
+  // Vercel's env variables escape newlines. We must un-escape them.
+  const privateKey = GOOGLE_SHEETS_CREDS.private_key.replace(/\\n/g, '\n');
+  // --- END FIX ---
+  
   const auth = new google.auth.JWT(
     GOOGLE_SHEETS_CREDS.client_email,
     null,
-    GOOGLE_SHEETS_CREDS.private_key,
+    privateKey, // Use the fixed key
     ['https://www.googleapis.com/auth/spreadsheets']
   );
   await auth.authorize();
