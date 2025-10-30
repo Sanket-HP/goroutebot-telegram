@@ -3,7 +3,7 @@ const express = require('express');
 const axios = require('axios');
 
 // Your bot's configuration (keep these secret!)
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; // We will set this in Vercel
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; // This is set in Vercel
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
 
 // --- MESSAGES ---
@@ -318,7 +318,7 @@ function generateSeatMap(busID) {
   
   // This is a static, mocked map
   seatMap += `🟩1A 🟩1B     🚌     🟩1C 🟩1D\n`;
-  seatMap += `🟩2A 🟩2B           🟩2C 🟩2D\n`;
+  seatMap += `🟩2A 🟩2B ...       🟩2C 🟩2D\n`;
   seatMap += `⚫3A 🟩3B           🟩3C ⚫3D\n`;
   seatMap += `🟩4A 🟩4B           🟩4C 🟩4D\n`;
   seatMap += `🟩5A ⚫5B           🟩5C 🟩5D\n`;
