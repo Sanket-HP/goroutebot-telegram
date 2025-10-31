@@ -68,8 +68,10 @@ function getFirebaseDb() {
       return db;
     }
     
+    // --- SAFETY CHECK ---
     const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
     if (!rawCredsBase64) {
+      // This is the CRITICAL ERROR handler. It throws, so the caller can send a message.
       throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
     }
     
@@ -201,6 +203,50 @@ async function handleUserMessage(chatId, text, user) {
     await sendMessage(chatId, MESSAGES.unknown_command);
   }
 }
+
+/* --------------------- CORE HANDLERS (DEFINED FIRST TO AVOID CRASHES) ---------------------- */
+
+// --- CORE MENU FUNCTION ---
+async function sendHelpMessage(chatId) {
+    const userRole = await getUserRole(chatId);
+    let keyboard;
+
+    if (userRole === 'manager' || userRole === 'owner') {
+        // Manager/Owner Menu: Focus on managing schedules
+        keyboard = {
+            inline_keyboard: [
+                [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+                [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
+                [{ text: "👤 My Profile", callback_data: "cb_my_profile" }],
+            ]
+        };
+    } else {
+        // Regular User Menu: Focus on booking
+        keyboard = {
+            inline_keyboard: [
+                [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
+                [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }],
+                [{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]
+            ]
+        };
+    }
+    await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
+}
+
+async function handleSystemStatus(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const userCount = (await db.collection('users').get()).size;
+        const bookingCount = (await db.collection('bookings').get()).size;
+        const busCount = (await db.collection('buses').get()).size;
+
+        const statusText = `📊 *System Status*\n\n🟢 *Status:* Operational\n👥 *Users:* ${userCount}\n🎫 *Bookings:* ${bookingCount}\n🚌 *Buses:* ${busCount}\n🕒 *Last Check:* ${new Date().toLocaleTimeString('en-IN')}\n\n💡 All database services are functioning normally.`;
+        await sendMessage(chatId, statusText, "Markdown");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END CORE MENU FUNCTION ---
 
 /* --------------------- General Handlers ---------------------- */
 
