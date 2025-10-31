@@ -544,7 +544,8 @@ async function handleSeatMap(chatId, text) {
     let seatMap = `🚍 *Seat Map - ${busID}*\n`;
     seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
     seatMap += `🕒 ${busInfo.date} ${busInfo.time}\n\n`;
-    seatMap += `Legend: 🟩 Available • ⚫ Booked Male/Female\n\n`; // Updated Legend
+    seatMap += `Legend: 🟩 Available • ⚫M Booked Male • ⚫F Booked Female\n\n`; // UPDATED LEGEND
+    // seatMap += `Legend: 🟩 Available • ⚫ Booked Male/Female\n\n`; // Old line
 
     for (let row = 1; row <= 10; row++) {
       let line = '';
