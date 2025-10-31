@@ -1,12 +1,11 @@
 // Import the libraries we installed
 const express = require('express');
 const axios = require('axios');
-const admin = require('firebase-admin'); // <-- NEW: Replaces Google Sheets
+const admin = require('firebase-admin'); // <-- We need this
 
 // Your bot's configuration (keep these secret!)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; // This is set in Vercel
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-// No more SPREADSHEET_ID needed!
 
 // --- MESSAGES ---
 const MESSAGES = {
@@ -549,14 +548,15 @@ function getFirebaseDb() {
       return db;
     }
     
-    // Get the raw, single-line JSON string from Vercel
-    const rawCreds = process.env.FIREBASE_CREDS;
-    if (!rawCreds) {
-      throw new Error("CRITICAL: FIREBASE_CREDS is not defined in Vercel Environment Variables.");
+    // Get the raw, Base64 string from Vercel
+    const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
+    if (!rawCredsBase64) {
+      throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
     }
     
-    // Parse the JSON string
-    const serviceAccount = JSON.parse(rawCreds.replace(/\\n/g, '\n'));
+    // --- FINAL FIX: Decode the Base64 string ---
+    const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
+    const serviceAccount = JSON.parse(jsonString);
 
     // Initialize the Firebase Admin SDK
     admin.initializeApp({
@@ -640,4 +640,3 @@ async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
 
 // Start the server
 module.exports = app;
-
