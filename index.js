@@ -26,6 +26,11 @@ Select an option from the menu below to get started. You can also type commands 
   profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Name] / [Aadhar Number] / [Phone Number]`", // UPDATED ERROR PROMPT
   user_not_found: "❌ User not found. Please send /start to register.",
 
+  // Phone Update (NEW)
+  update_phone_prompt: "📞 *Update Phone:* Please enter your new 10-digit phone number now.",
+  phone_updated_success: "✅ Phone number updated successfully!",
+  phone_invalid: "❌ Invalid phone number. Please enter a 10-digit number only.",
+
   // Booking
   booking_type_prompt: "👤 *Booking Seats:* Please select your booking type:",
   gender_prompt: "🚻 *Seat Safety:* Is the passenger booking seat {seatNo} a Male or Female?",
@@ -143,6 +148,8 @@ app.post('/api/webhook', async (req, res) => {
         await handleManagerAddBus(chatId);
       } else if (callbackData === 'cb_start_tracking') { // Manager Start Tracking Button
         await handleManagerLiveTrackingSetup(chatId);
+      } else if (callbackData === 'cb_update_phone') { // NEW: Update Phone Button
+        await handleUpdatePhoneNumberCallback(chatId);
       } else if (callbackData.startsWith('cb_select_gender_')) { // NEW: Gender selection callback
         await handleGenderSelectionCallback(chatId, callbackData);
       } else if (callbackData === 'cb_add_passenger') { // NEW: Add Passenger button click
@@ -178,8 +185,10 @@ async function handleUserMessage(chatId, text, user) {
          await handleBookingInput(chatId, text, state);
       } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
          await handleManagerInput(chatId, text, state);
-      } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { // NEW: Tracking Setup State
+      } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { // Tracking Setup State
          await handleLiveTrackingSetupInput(chatId, text, state);
+      } else if (state.state === 'AWAITING_NEW_PHONE') { // NEW: Phone Update State
+         await handlePhoneUpdateInput(chatId, text);
       }
       return;
   }
@@ -239,29 +248,42 @@ async function getUserRole(chatId) {
 
 // --- CORE MENU FUNCTION ---
 async function sendHelpMessage(chatId) {
-    const userRole = await getUserRole(chatId);
+    const db = getFirebaseDb();
+    const userDoc = await db.collection('users').doc(String(chatId)).get();
+    const userRole = userDoc.exists ? userDoc.data().role : 'unregistered';
+    
     let keyboard;
+    let baseButtons = [];
 
     if (userRole === 'manager' || userRole === 'owner') {
-        // Manager/Owner Menu: Focus on managing schedules
-        keyboard = {
-            inline_keyboard: [
-                [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
-                [{ text: "📍 Start Tracking", callback_data: "cb_start_tracking" }], // New Tracking Button
-                [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
-                [{ text: "👤 My Profile", callback_data: "cb_my_profile" }],
-            ]
-        };
+        baseButtons = [
+            [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+            [{ text: "📍 Start Tracking", callback_data: "cb_start_tracking" }], 
+            [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
+        ];
     } else {
-        // Regular User Menu: Focus on booking
-        keyboard = {
-            inline_keyboard: [
-                [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
-                [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }],
-                [{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]
-            ]
-        };
+        baseButtons = [
+            [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
+            [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
+        ];
     }
+    
+    let finalButtons = baseButtons;
+    
+    // Check if user is registered to show profile/phone options
+    if (userDoc.exists) {
+        // Add Update Phone button only after registration
+        finalButtons.push([{ text: "📞 Update Phone", callback_data: "cb_update_phone" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }]);
+    } else {
+        // Only show the basic profile link if unregistered
+         finalButtons.push([{ text: "👤 My Profile", callback_data: "cb_my_profile" }]);
+    }
+    
+    // Add Status/Help at the bottom
+    finalButtons.push([{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]);
+
+    keyboard = { inline_keyboard: finalButtons };
+
     await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
 }
 
@@ -281,6 +303,40 @@ async function handleSystemStatus(chatId) {
 // --- END CORE MENU FUNCTION ---
 
 /* --------------------- General Handlers ---------------------- */
+
+// NEW: Phone Update Flow Handlers
+async function handleUpdatePhoneNumberCallback(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole === 'unregistered' || userRole === 'error') {
+        return await sendMessage(chatId, "❌ You must register first to update your profile. Send /start.");
+    }
+    
+    await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
+    await sendMessage(chatId, MESSAGES.update_phone_prompt, "Markdown");
+}
+
+async function handlePhoneUpdateInput(chatId, text) {
+    const phoneRegex = /^\d{10}$/;
+    const phoneNumber = text.replace(/[^0-9]/g, '');
+
+    if (!phoneNumber.match(phoneRegex)) {
+        return await sendMessage(chatId, MESSAGES.phone_invalid, "Markdown");
+    }
+    
+    try {
+        const db = getFirebaseDb();
+        await db.collection('users').doc(String(chatId)).update({ phone: phoneNumber });
+        
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.phone_updated_success, "Markdown");
+        await handleUserProfile(chatId);
+        
+    } catch (error) {
+        console.error('❌ Phone Update Error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error + " Could not save phone number.");
+    }
+}
+
 
 // NEW: Function to show buses, used by callback
 async function showAvailableBuses(chatId) {
@@ -560,7 +616,7 @@ async function handleSeatMap(chatId, text) {
       for (let col of ['A', 'B', 'C', 'D']) {
         const seatNo = `${row}${col}`;
         const data = seatStatus[seatNo] || {}; 
-        const status = data.status || '⬜️'; 
+        const status = data.status || '⬜́'; 
         
         let display = '⬜́'; // Default to missing or error
         if (status === 'available') {
