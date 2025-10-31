@@ -44,7 +44,10 @@ Select an option from the menu below to get started. You can also type commands 
   manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
   manager_add_bus_price: "💰 Enter the Base Price (e.g., `850`):",
   manager_add_bus_type: "🚌 Enter the Bus Type (e.g., `AC Seater`):",
-  manager_bus_saved: "✅ *Bus {busID} created!* Route: {route}. Price: {price}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
+  manager_add_bus_depart_date: "📅 Enter the Departure Date (YYYY-MM-DD, e.g., `2025-12-25`):",
+  manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
+  manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
+  manager_bus_saved: "✅ *Bus {busID} created!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
 
@@ -52,7 +55,7 @@ Select an option from the menu below to get started. You can also type commands 
   tracking_manager_prompt: "📍 *Live Tracking Setup:* Enter the Bus ID you wish to track/update (e.g., `BUS101`).",
   tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
   tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
-  tracking_passenger_info: "🚍 *Live Tracking - {busID}*\n\n📍 *Last Location:* New Delhi Station\n🕒 *Last Updated:* {time}\n\n_Note: Location updates every 15 minutes_",
+  tracking_passenger_info: "🚍 *Live Tracking - {busID}*\n\n📍 *Last Location:* {location}\n🕒 *Last Updated:* {time}\n\n_Note: Location updates every 15 minutes_",
 
   // General
   db_error: "❌ CRITICAL ERROR: The bot's database is not connected. Please contact support."
@@ -138,6 +141,8 @@ app.post('/api/webhook', async (req, res) => {
         await handleUserProfile(chatId);
       } else if (callbackData === 'cb_add_bus_manager') {
         await handleManagerAddBus(chatId);
+      } else if (callbackData === 'cb_start_tracking') { // Manager Start Tracking Button
+        await handleManagerLiveTrackingSetup(chatId);
       } else if (callbackData.startsWith('cb_select_gender_')) { // NEW: Gender selection callback
         await handleGenderSelectionCallback(chatId, callbackData);
       } else if (callbackData === 'cb_add_passenger') { // NEW: Add Passenger button click
@@ -299,7 +304,7 @@ async function showAvailableBuses(chatId) {
         buses.forEach((bus, index) => {
             response += `*${index + 1}. ${bus.busID}* - ${bus.owner}\n`;
             response += `📍 ${bus.from} → ${bus.to}\n`;
-            response += `🕒 ${bus.date} ${bus.time}\n`;
+            response += `📅 ${bus.date} 🕒 ${bus.time}\n`;
             response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
             response += `💺 ${bus.availableSeats} seats available\n`;
             response += `📋 *"Show seats ${bus.busID}"* to view seats\n\n`;
@@ -545,7 +550,6 @@ async function handleSeatMap(chatId, text) {
     seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
     seatMap += `🕒 ${busInfo.date} ${busInfo.time}\n\n`;
     seatMap += `Legend: 🟩 Available • ⚫M Booked Male • ⚫F Booked Female\n\n`; // UPDATED LEGEND
-    // seatMap += `Legend: 🟩 Available • ⚫ Booked Male/Female\n\n`; // Old line
 
     for (let row = 1; row <= 10; row++) {
       let line = '';
@@ -554,7 +558,7 @@ async function handleSeatMap(chatId, text) {
         const data = seatStatus[seatNo] || {}; 
         const status = data.status || '⬜️'; 
         
-        let display = '⬜️'; // Default to missing
+        let display = '⬜́'; // Default to missing or error
         if (status === 'available') {
             display = `🟩${seatNo}`; // Available
         } else if (status === 'booked' || status === 'locked') {
@@ -758,6 +762,89 @@ async function finalizeBooking(chatId, booking) {
 
 /* --------------------- Manager Flow Handlers ---------------------- */
 
+async function handleManagerLiveTrackingSetup(chatId) {
+    try {
+        const userRole = await getUserRole(chatId);
+        if (userRole !== 'manager' && userRole !== 'owner') {
+             return await sendMessage(chatId, "❌ You do not have permission to enable live tracking.");
+        }
+        
+        await saveAppState(chatId, 'MANAGER_LIVE_TRACKING_BUSID', {});
+        await sendMessage(chatId, MESSAGES.tracking_manager_prompt, "Markdown");
+
+    } catch (error) {
+        console.error('❌ Manager Live Tracking Setup error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleLiveTracking(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    const busMatch = text.match(/(BUS\d+)/i);
+    const busID = busMatch ? busMatch[1].toUpperCase() : null;
+
+    if (!busID) {
+        if (userRole === 'manager' || userRole === 'owner') {
+            return await handleManagerLiveTrackingSetup(chatId);
+        }
+        return await sendMessage(chatId, "❌ Please specify a bus ID. Example: `live tracking BUS101`");
+    }
+
+    // --- PASSENGER VIEW LOGIC ---
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        if (!busDoc.exists || !busDoc.data().tracking_manager_id) {
+            return await sendMessage(chatId, MESSAGES.tracking_not_found.replace('{busID}', busID));
+        }
+
+        const data = busDoc.data();
+        const lastUpdated = data.last_location_time ? data.last_location_time.toDate().toLocaleTimeString('en-IN') : 'N/A';
+
+        // NOTE: The location and time data below would normally come from the external Cron Job updating the bus document.
+        const trackingInfo = MESSAGES.tracking_passenger_info.replace('{busID}', busID).replace('{location}', data.last_location_name || 'Bus is stationary').replace('{time}', lastUpdated);
+        await sendMessage(chatId, trackingInfo, "Markdown");
+        
+    } catch (error) {
+        console.error('❌ Live Tracking error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleLiveTrackingSetupInput(chatId, text, state) {
+    const db = getFirebaseDb();
+    const data = state.data;
+    let response = '';
+
+    try {
+        if (state.state === 'MANAGER_LIVE_TRACKING_BUSID') {
+            data.busID = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+            const busDoc = await db.collection('buses').doc(data.busID).get();
+
+            if (!busDoc.exists) {
+                return await sendMessage(chatId, `❌ Bus ID ${data.busID} does not exist. Please create it first.`);
+            }
+
+            // Bind manager to bus
+            await db.collection('buses').doc(data.busID).update({
+                tracking_manager_id: String(chatId),
+                last_location_time: admin.firestore.FieldValue.serverTimestamp(),
+                last_location_name: "Bus is starting soon" 
+            });
+
+            // Clear state
+            await saveAppState(chatId, 'IDLE', {});
+            response = MESSAGES.tracking_manager_enabled.replace('{busID}', data.busID);
+            await sendMessage(chatId, response, "Markdown");
+        }
+    } catch (error) {
+        console.error('❌ Live Tracking Setup Input Error:', error.message);
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.db_error + " Tracking setup failed.");
+    }
+}
+
+
 async function handleManagerAddBus(chatId) {
     try {
         const userRole = await getUserRole(chatId);
@@ -779,6 +866,9 @@ async function handleManagerInput(chatId, text, state) {
     const data = state.data;
     let nextState = '';
     let response = '';
+
+    const timeRegex = /^\d{2}:\d{2}$/;
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
 
     try {
         switch (state.state) {
@@ -806,6 +896,27 @@ async function handleManagerInput(chatId, text, state) {
                 
             case 'MANAGER_ADD_BUS_TYPE':
                 data.busType = text;
+                nextState = 'MANAGER_ADD_BUS_DEPART_DATE';
+                response = MESSAGES.manager_add_bus_depart_date;
+                break;
+            
+            case 'MANAGER_ADD_BUS_DEPART_DATE':
+                if (!text.match(dateRegex)) return await sendMessage(chatId, "❌ Invalid date format (YYYY-MM-DD). Try again:", "Markdown");
+                data.departDate = text;
+                nextState = 'MANAGER_ADD_BUS_DEPART_TIME';
+                response = MESSAGES.manager_add_bus_depart_time;
+                break;
+                
+            case 'MANAGER_ADD_BUS_DEPART_TIME':
+                if (!text.match(timeRegex)) return await sendMessage(chatId, "❌ Invalid time format (HH:MM). Try again:", "Markdown");
+                data.departTime = text;
+                nextState = 'MANAGER_ADD_BUS_ARRIVE_TIME';
+                response = MESSAGES.manager_add_bus_arrive_time;
+                break;
+
+            case 'MANAGER_ADD_BUS_ARRIVE_TIME':
+                if (!text.match(timeRegex)) return await sendMessage(chatId, "❌ Invalid time format (HH:MM). Try again:", "Markdown");
+                data.arriveTime = text;
                 
                 const userDoc = await db.collection('users').doc(String(chatId)).get();
                 const ownerName = userDoc.exists ? userDoc.data().name : 'System Owner';
@@ -816,7 +927,9 @@ async function handleManagerInput(chatId, text, state) {
                     owner: ownerName,
                     from: data.route.split(' to ')[0].trim(),
                     to: data.route.split(' to ')[1].trim(),
-                    departure_time: new Date().toISOString().split('T')[0] + " 10:00", 
+                    // Combine date and time
+                    departure_time: `${data.departDate} ${data.departTime}`, 
+                    arrival_time: data.arriveTime,
                     price: data.price,
                     bus_type: data.busType,
                     total_seats: 40, 
@@ -824,10 +937,15 @@ async function handleManagerInput(chatId, text, state) {
                     status: 'scheduled'
                 });
                 
-                // 2. Clear state and tell manager to add seats
+                // 2. Clear state and notify manager
                 await db.collection('user_state').doc(String(chatId)).delete(); 
 
-                response = MESSAGES.manager_bus_saved.replace('{busID}', data.busID).replace('{route}', data.route).replace('{price}', data.price);
+                response = MESSAGES.manager_bus_saved
+                    .replace('{busID}', data.busID)
+                    .replace('{route}', data.route)
+                    .replace('{departDate}', data.departDate)
+                    .replace('{departTime}', data.departTime)
+                    .replace('{arriveTime}', data.arriveTime);
                 await sendMessage(chatId, response, "Markdown");
                 return;
         }
