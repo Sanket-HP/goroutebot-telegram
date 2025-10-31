@@ -1,16 +1,12 @@
 // Import the libraries we installed
 const express = require('express');
 const axios = require('axios');
-const { google } = require('googleapis'); // <-- We need this
+const admin = require('firebase-admin'); // <-- NEW: Replaces Google Sheets
 
 // Your bot's configuration (keep these secret!)
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; // This is set in Vercel
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-
-// --- Google Sheets Config ---
-const SPREADSHEET_ID = "1784I1ppOyNHgYc98ZKxKOBU3RFWjNwpgiI5dJWQD8Ro"; // Your Sheet ID
-// We will now load and parse GOOGLE_SHEETS_CREDS inside the helper function
-// --- END Config ---
+// No more SPREADSHEET_ID needed!
 
 // --- MESSAGES ---
 const MESSAGES = {
@@ -26,13 +22,15 @@ Select an option from the menu below to get started. You can also type commands 
   
   // --- NEW REGISTRATION MESSAGES ---
   prompt_role: "🎉 *Welcome to GoRoute!* To get started, please choose your role:",
-  registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number]`\n\n(Don't worry, this is just an example for now!)",
+  registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number]`",
   profile_updated: "✅ *Profile Updated!* Your details have been saved.",
   profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Your Name] / [Your Aadhar]`",
   
   unknown_command: `🤖 Sorry, I didn't understand that.\n\nType /help to see the main menu.`,
   user_not_found: "❌ User not found. Please send /start to register.",
-  general_error: "❌ Sorry, I encountered an error. Please try again or type /help."
+  general_error: "❌ Sorry, I encountered an error. Please try again or type /help.",
+  // --- NEW: Database error message ---
+  db_error: "❌ CRITICAL ERROR: The bot's database is not connected. Please contact support."
 };
 
 // Create the server
@@ -99,10 +97,10 @@ async function handleUserMessage(chatId, text, user) {
   
   const textLower = text.toLowerCase().trim();
 
-  // The /start command is now a REAL, (slower) database function.
+  // The /start command now talks to Firebase
   if (textLower === '/start') {
-    await startUserRegistration(chatId, user); // Pass the full user object
-    return; // Stop processing
+    await startUserRegistration(chatId, user);
+    return;
   }
 
   // Handle /help separately to show the button menu
@@ -112,12 +110,11 @@ async function handleUserMessage(chatId, text, user) {
     return;
   }
 
-  // --- NEW: Handle profile details submission ---
+  // Handle profile details submission
   if (textLower.startsWith('my profile details')) {
     await handleProfileUpdate(chatId, text);
     return;
   }
-  // --- END NEW ---
 
   // --- All other text commands ---
   const userName = user.first_name || 'User';
@@ -127,7 +124,7 @@ async function handleUserMessage(chatId, text, user) {
     await handleBusSearch(chatId);
   }
   else if (textLower.startsWith('show seats')) {
-    await handleSeatMap(chatId, text); // This is now a REAL function
+    await handleSeatMap(chatId, text); // This is still mocked (for now)
   }
   else if (textLower.startsWith('book seat')) {
     await handleSeatSelection(chatId, text);
@@ -161,16 +158,18 @@ async function handleUserMessage(chatId, text, user) {
 
 /* --------------------- Specific Command Handlers ---------------------- */
 
-// --- THIS IS THE NEW, REAL /start FUNCTION ---
+// --- NEW /start FUNCTION (using Firebase) ---
 async function startUserRegistration(chatId, user) {
   console.log(`Registering user: ${user.first_name} (${chatId})`);
   
   try {
-    // 1. Check if user exists
-    const userRow = await findUserRow(chatId);
+    const db = getFirebaseDb();
+    // 1. Check if user exists in Firebase
+    const userRef = db.collection('users').doc(String(chatId));
+    const doc = await userRef.get();
 
     // 2. If user exists, just welcome them
-    if (userRow) {
+    if (doc.exists) {
       console.log(`User ${chatId} already exists.`);
       await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', user.first_name || 'User'));
       await sendHelpMessage(chatId); // Show them the main menu
@@ -190,53 +189,47 @@ async function startUserRegistration(chatId, user) {
 
   } catch (error) {
     console.error('❌ /start error:', error.message);
-    await handleSheetError(error, chatId);
+    await sendMessage(chatId, MESSAGES.db_error);
   }
 }
 // --- END OF NEW /start FUNCTION ---
 
-// --- NEW FUNCTION: Handles the role button click ---
+// --- NEW FUNCTION (using Firebase) ---
 async function handleRoleSelection(chatId, user, callbackData) {
   const role = callbackData.split('_').pop(); // 'user', 'manager', or 'owner'
   const userName = user.first_name + (user.last_name ? ' ' + user.last_name : '');
   console.log(`Creating new user for ${chatId} with role: ${role}`);
 
   try {
-    const sheets = await getGoogleSheetsClient();
+    const db = getFirebaseDb();
     const userId = 'USER' + Date.now();
-    const joinDate = new Date().toISOString();
-    // Schema: A: UserID, B: Name, C: ChatID, D: Phone, E: Aadhar, F: Status, G: Role, H: Lang, I: JoinDate
-    const newRow = [
-      userId,         // A: UserID
-      userName,       // B: Name
-      String(chatId), // C: ChatID
-      '',             // D: Phone
-      '',             // E: Aadhar
-      'pending_details', // F: Status
-      role,           // G: Role
-      'en',           // H: Lang (default)
-      joinDate        // I: JoinDate
-    ];
     
-    await sheets.spreadsheets.values.append({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Users!A1',
-      valueInputOption: 'USER_ENTERED',
-      resource: {
-        values: [newRow],
-      },
-    });
+    // Create new user object
+    const newUser = {
+      user_id: userId,
+      name: userName,
+      chat_id: String(chatId),
+      phone: '',
+      aadhar: '',
+      status: 'pending_details',
+      role: role,
+      lang: 'en',
+      join_date: admin.firestore.FieldValue.serverTimestamp() // Use Firebase's timestamp
+    };
+    
+    // Set the document in Firestore using chat_id as the Document ID
+    await db.collection('users').doc(String(chatId)).set(newUser);
     
     // Tell user what to do next
     await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "Markdown");
   
   } catch (error) {
     console.error('❌ handleRoleSelection error:', error.message);
-    await handleSheetError(error, chatId);
+    await sendMessage(chatId, MESSAGES.db_error);
   }
 }
 
-// --- NEW FUNCTION: Handles the "my profile details" command ---
+// --- NEW FUNCTION (using Firebase) ---
 async function handleProfileUpdate(chatId, text) {
   try {
     // 1. Parse details from text
@@ -251,34 +244,21 @@ async function handleProfileUpdate(chatId, text) {
 
     if (!name || !aadhar) throw new Error("Invalid format");
 
-    // 2. Find user's row in sheet
-    const userRow = await findUserRow(chatId);
-    if (!userRow) {
+    // 2. Find user in DB
+    const db = getFirebaseDb();
+    const userRef = db.collection('users').doc(String(chatId));
+    const doc = await userRef.get();
+
+    if (!doc.exists) {
       await sendMessage(chatId, MESSAGES.user_not_found);
       return;
     }
     
-    // 3. Update the sheet
-    const sheets = await getGoogleSheetsClient();
-    await sheets.spreadsheets.values.batchUpdate({
-      spreadsheetId: SPREADSHEET_ID,
-      resource: {
-        valueInputOption: 'USER_ENTERED',
-        data: [
-          {
-            range: `Users!B${userRow.rowIndex}`, // Column B = Name
-            values: [[name]]
-          },
-          {
-            range: `Users!E${userRow.rowIndex}`, // Column E = Aadhar
-            values: [[aadhar]]
-          },
-          {
-            range: `Users!F${userRow.rowIndex}`, // Column F = Status
-            values: [['active']]
-          }
-        ]
-      }
+    // 3. Update the DB
+    await userRef.update({
+      name: name,
+      aadhar: aadhar,
+      status: 'active'
     });
 
     await sendMessage(chatId, MESSAGES.profile_updated, "Markdown");
@@ -289,7 +269,7 @@ async function handleProfileUpdate(chatId, text) {
       await sendMessage(chatId, MESSAGES.profile_update_error, "Markdown");
     } else {
       console.error('❌ handleProfileUpdate error:', error.message);
-      await handleSheetError(error, chatId);
+      await sendMessage(chatId, MESSAGES.db_error);
     }
   }
 }
@@ -314,6 +294,7 @@ async function handleSetLanguage(chatId, language) {
 // --- NEW: SENDS BUTTON MENU ---
 async function sendHelpMessage(chatId) {
   // TODO: Add role-based menus
+  // const user = await findUser(chatId);
   // if (user.role === 'manager') { ... }
   const keyboard = {
     inline_keyboard: [
@@ -344,9 +325,8 @@ async function handleBusSearch(chatId) {
     const buses = getAvailableBuses(); // Mocked data
     
     // TODO: This function should be made REAL
-    // 1. Get GoogleSheetsClient
-    // 2. Read from 'Buses' sheet
-    // 3. Loop and build a list of bus objects
+    // 1. Create a 'buses' collection in Firebase
+    // 2. Read from it: const snapshot = await db.collection('buses').get();
     
     if (!buses || buses.length === 0) {
       await sendMessage(chatId, MESSAGES.no_buses, "Markdown");
@@ -376,7 +356,7 @@ async function handleBusSearch(chatId) {
   }
 }
 
-// --- THIS IS THE NEW, REAL "Show Seats" FUNCTION ---
+// --- THIS IS MOCKED (for now) ---
 async function handleSeatMap(chatId, text) {
   try {
     const busMatch = text.match(/(BUS\d+)/i);
@@ -387,27 +367,11 @@ async function handleSeatMap(chatId, text) {
       return;
     }
     
-    console.log(`Fetching REAL seat map for ${busID}`);
-    const sheets = await getGoogleSheetsClient();
-    const response = await sheets.spreadsheets.values.get({
-      spreadsheetId: SPREADSHEET_ID,
-      range: 'Seats!A:F', // Schema: A:BusID, B:SeatNo ... F:Status
-    });
-
-    const allSeats = response.data.values;
-    if (!allSeats) {
-      await sendMessage(chatId, MESSAGES.seat_map_error.replace('{busID}', busID), "Markdown");
-      return;
-    }
-
-    // Filter seats for the requested bus
-    const busSeats = allSeats.filter(row => row && row[0] === busID);
-    if (busSeats.length === 0) {
-      await sendMessage(chatId, MESSAGES.no_seats_found.replace('{busID}', busID), "Markdown");
-      return;
-    }
-
-    // Get mocked bus info for header (From, To, Time)
+    // TODO: This function should be made REAL
+    // 1. Create a 'seats' collection in Firebase
+    // 2. Read from it: const snapshot = await db.collection('seats').where('bus_id', '==', busID).get();
+    
+    console.log(`Fetching MOCKED seat map for ${busID}`);
     const busInfo = getBusInfo(busID) || { from: 'N/A', to: 'N/A', date: 'N/A', time: 'N/A' };
 
     let seatMap = `🚍 *Seat Map - ${busID}*\n`;
@@ -415,42 +379,25 @@ async function handleSeatMap(chatId, text) {
     seatMap += `🕒 ${busInfo.date} ${busInfo.time}\n\n`;
     seatMap += `Legend: 🟩 Available • ⚫ Booked\n\n`;
 
-    // Build a dictionary for fast lookup
-    let availableCount = 0;
-    const seatStatus = {};
-    busSeats.forEach(row => {
-      const seatNo = row[1]; // e.g., "1A"
-      const status = row[5]; // e.g., "available"
-      seatStatus[seatNo] = status;
-      if (status === 'available') availableCount++;
-    });
-
-    // Loop and build the visual map
-    // This assumes a 10-row, 4-col (A,B,C,D) layout
+    // Static mocked map
     for (let row = 1; row <= 10; row++) {
       let line = '';
       for (let col of ['A', 'B', 'C', 'D']) {
         const seatNo = `${row}${col}`;
-        const status = seatStatus[seatNo];
-        
-        if (status === 'available') {
-          line += '🟩'; // Available
-        } else if (status === 'booked' || status === 'locked') {
-          line += '⚫'; // Booked
-        } else {
-          line += '⬜️'; // Not found in sheet
+        let status = '🟩'; // Available
+        if (seatNo === '3A' || seatNo === '5B' || seatNo === '3D') {
+          status = '⚫'; // Booked
         }
         
+        line += `${status} ${seatNo} `;
         if (col === 'B') {
-          line += ` ${seatNo}     🚌    `; // Aisle
-        } else {
-          line += ` ${seatNo} `;
+          line += `    🚌    `; // Aisle
         }
       }
       seatMap += line + '\n';
     }
     
-    seatMap += `\n📊 *${availableCount}* seats available / ${busSeats.length}\n\n`;
+    seatMap += `\n📊 *37* seats available / 40\n\n`; // Mocked
     seatMap += `💡 *Book a seat:* "Book seat ${busID} SEAT_NUMBER"\n`;
     seatMap += ` Example: "Book seat ${busID} 1A"`;
 
@@ -458,55 +405,58 @@ async function handleSeatMap(chatId, text) {
     
   } catch (error) {
     console.error('❌ Seat map error:', error.message);
-    await handleSheetError(error, chatId);
+    await sendMessage(chatId, MESSAGES.general_error);
   }
 }
-// --- END OF REAL FUNCTION ---
+// --- END OF MOCKED FUNCTION ---
 
 async function handleSeatSelection(chatId, text) {
   // This is the next major function to build.
-  // It will require state management.
+  // It will require state management (e.g., asking for passenger name, aadhar, etc.)
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
 async function handleBookingInfo(chatId) {
-  // TODO: Read 'Bookings' sheet and filter by ChatID
+  // TODO: Read 'bookings' collection and filter by chat_id
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
 async function handleCancellation(chatId, text) {
   // TODO:
-  // 1. Parse BookingID from text
-  // 2. Find booking in 'Bookings' sheet, verify ChatID
-  // 3. Update 'Bookings' status to 'cancelled'
-  // 4. Find seat in 'Seats' sheet, update status to 'available'
+  // 1. Parse BookingID
+  // 2. Find booking in 'bookings' collection, verify chat_id
+  // 3. Update 'bookings' status to 'cancelled'
+  // 4. Find seat in 'seats' collection, update status to 'available'
   await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
 }
 
 
-// --- THIS IS THE UPDATED "My Profile" FUNCTION ---
+// --- THIS IS THE NEW, REAL "My Profile" FUNCTION (using Firebase) ---
 async function handleUserProfile(chatId) {
   console.log(`Fetching profile for ${chatId}`);
   try {
-    const userRow = await findUserRow(chatId);
+    const db = getFirebaseDb();
+    const userRef = db.collection('users').doc(String(chatId));
+    const doc = await userRef.get();
 
-    if (userRow) {
+    if (doc.exists) {
       // Found the user!
-      // Schema: A:UserID, B:Name, C:ChatID, D:Phone, E:Aadhar, F:Status, G:Role, H:Lang, I:JoinDate
-      const rowData = userRow.row;
+      const user = doc.data();
+      
+      const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
       
       const profileText = `👤 *Your Profile*\n\n` +
-                          `*Name:* ${rowData[1] || 'Not set'}\n` +
-                          `*Chat ID:* ${rowData[2]}\n` +
-                          `*Phone:* ${rowData[3] || 'Not set'}\n` +
-                          `*Aadhar:* ${rowData[4] || 'Not set'}\n` +
-                          `*Role:* ${rowData[6] || 'user'}\n` +
-                          `*Status:* ${rowData[5] || 'N/A'}\n` +
-                          `*Member since:* ${rowData[8] ? new Date(rowData[8]).toLocaleDateString('en-IN') : 'N/A'}`;
+                          `*Name:* ${user.name || 'Not set'}\n` +
+                          `*Chat ID:* ${user.chat_id}\n` +
+                          `*Phone:* ${user.phone || 'Not set'}\n` +
+                          `*Aadhar:* ${user.aadhar || 'Not set'}\n` +
+                          `*Role:* ${user.role || 'user'}\n` +
+                          `*Status:* ${user.status || 'N/A'}\n` +
+                          `*Member since:* ${joinDate}`;
       
       await sendMessage(chatId, profileText, "Markdown");
       
-      if (rowData[5] === 'pending_details') {
+      if (user.status === 'pending_details') {
          await sendMessage(chatId, "Please complete your profile by typing:\n`my profile details [Name] / [Aadhar]`", "Markdown");
       }
 
@@ -517,7 +467,7 @@ async function handleUserProfile(chatId) {
 
   } catch (error) {
     console.error('❌ Error in handleUserProfile:', error.message);
-    await handleSheetError(error, chatId);
+    await sendMessage(chatId, MESSAGES.db_error);
   }
 }
 // --- END OF UPDATED FUNCTION ---
@@ -530,7 +480,6 @@ async function handleLiveTracking(chatId, text) {
 
 function getAvailableBuses() {
   // This is still mocked.
-  // TODO: Read this from 'Buses' sheet just like we read from 'Seats'.
   console.log("Building NEW buses list from SAMPLE data (Fast Path)");
   return [
     {
@@ -579,96 +528,53 @@ function getBusInfo(busID) {
   return null; // Bus not found
 }
 
-/* --------------------- Google Sheets Helper ---------------------- */
+/* --------------------- NEW Firebase Helper ---------------------- */
 
-// --- NEW HELPER: findUserRow ---
+let db; // Create a cached instance of the database
+
 /**
- * Finds a user's full row and row index by their ChatID.
- * @param {string} chatId The user's Telegram Chat ID
- * @returns {object | null} { row, rowIndex } or null if not found
+ * Initializes and/or returns the Firebase Firestore database instance.
+ * This is a robust function that handles the Vercel environment.
  */
-async function findUserRow(chatId) {
-  const sheets = await getGoogleSheetsClient();
-  const response = await sheets.spreadsheets.values.get({
-    spreadsheetId: SPREADSHEET_ID,
-    range: 'Users!A:I', // Get all user data
-  });
-
-  const rows = response.data.values;
-  if (!rows || rows.length === 0) {
-    console.log("No users found in sheet.");
-    return null;
+function getFirebaseDb() {
+  // If we already initialized, return the cached instance
+  if (db) {
+    return db;
   }
 
-  // Find the user with a matching ChatID in Column C (index 2)
-  // Skip header row (index 0)
-  for (let i = 1; i < rows.length; i++) {
-    const row = rows[i];
-    // Check if Column C (ChatID) matches
-    if (row && row[2] && row[2] === String(chatId)) {
-      return {
-        row: row,
-        rowIndex: i + 1 // 1-based index for sheet ranges
-      };
-    }
-  }
-  
-  console.log(`User ${chatId} not found in sheet.`);
-  return null; // User not found
-}
-// --- END NEW HELPER ---
-
-// --- THIS IS THE FINAL, ROBUST VERSION ---
-async function getGoogleSheetsClient() {
-  // 1. Get the raw string from Vercel
-  const rawCreds = process.env.GOOGLE_SHEETS_CREDS;
-  if (!rawCreds) {
-    throw new Error("CRITICAL: GOOGLE_SHEETS_CREDS is not defined. Check Vercel Environment Variables.");
-  }
-
-  let creds;
   try {
-    // 2. Parse it
-    creds = JSON.parse(rawCreds);
+    // Check if Firebase app is already initialized
+    if (admin.apps.length > 0) {
+      db = admin.firestore();
+      return db;
+    }
+    
+    // Get the raw, single-line JSON string from Vercel
+    const rawCreds = process.env.FIREBASE_CREDS;
+    if (!rawCreds) {
+      throw new Error("CRITICAL: FIREBASE_CREDS is not defined in Vercel Environment Variables.");
+    }
+    
+    // Parse the JSON string
+    const serviceAccount = JSON.parse(rawCreds.replace(/\\n/g, '\n'));
+
+    // Initialize the Firebase Admin SDK
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount)
+    });
+    
+    // Get the Firestore database instance
+    db = admin.firestore();
+    console.log("Firebase initialized successfully!");
+    return db;
+
   } catch (e) {
-    console.error("CRITICAL ERROR: GOOGLE_SHEETS_CREDS is not valid JSON.", e.message);
-    throw new Error("CRITICAL: GOOGLE_SHEETS_CREDS is not valid JSON.");
-  }
-  
-  // 3. Fix the private key (the \n bug)
-  const privateKey = creds.private_key.replace(/\\n/g, '\n');
-  
-  // 4. Authenticate
-  const auth = new google.auth.JWT(
-    creds.client_email,
-    null,
-    privateKey,
-    ['https://www.googleapis.com/auth/spreadsheets']
-  );
-  
-  await auth.authorize();
-  const sheets = google.sheets({ version: 'v4', auth });
-  return sheets;
-}
-// --- END FINAL VERSION ---
-
-
-// --- NEW HELPER: handleSheetError ---
-async function handleSheetError(error, chatId) {
-  console.error('❌ Google Sheet Error:', error.message);
-  // Log the specific Google API error if available
-  if (error.errors) {
-    console.error('Google API Errors:', JSON.stringify(error.errors, null, 2));
-  }
-  
-  if (error.message.includes("key") || error.message.includes("CRITICAL")) {
-     await sendMessage(chatId, "❌ CRITICAL ERROR: The bot's server is not configured correctly. Please contact support.");
-  } else if (error.message.includes("permission") || error.message.includes("denied")) {
-     await sendMessage(chatId, "❌ CRITICAL ERROR: The bot does not have permission to access the database. Please contact support.");
-  } else {
-    await sendMessage(chatId, MESSAGES.general_error);
+    console.error("CRITICAL FIREBASE ERROR", e.message);
+    // This will be caught by the calling functions
+    throw e; 
   }
 }
+
 
 /* --------------------- Helper Functions (axios) ---------------------- */
 
@@ -734,15 +640,4 @@ async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
 
 // Start the server
 module.exports = app;
-
-// --- SCHEMA REMINDER FOR YOUR "Users" SHEET ---
-// Col A: UserID
-// Col B: Name
-// Col C: ChatID
-// Col D: Phone
-// Col E: Aadhar
-// Col F: Status (e.g., "active", "pending_details")
-// Col G: Role (e.g., "user", "manager", "owner")
-// Col H: Lang
-// Col I: JoinDate
 
