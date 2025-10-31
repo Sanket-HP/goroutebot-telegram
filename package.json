@@ -11,8 +11,9 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@vercel/postgres": "^0.10.0",
     "axios": "^1.13.1",
     "express": "^5.1.0",
-    "googleapis": "^164.1.0"
+    "firebase-admin": "^13.5.0"
   }
 }
