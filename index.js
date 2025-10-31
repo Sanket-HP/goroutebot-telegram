@@ -193,6 +193,62 @@ async function handleUserMessage(chatId, text, user) {
   }
 }
 
+/* --------------------- Shared Helper Functions ---------------------- */
+
+// Helper function to get user's current role
+async function getUserRole(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('users').doc(String(chatId)).get();
+        if (doc.exists) return doc.data().role;
+        return 'unregistered';
+    } catch (e) {
+        return 'error';
+    }
+}
+
+// --- CORE MENU FUNCTION ---
+async function sendHelpMessage(chatId) {
+    const userRole = await getUserRole(chatId);
+    let keyboard;
+
+    if (userRole === 'manager' || userRole === 'owner') {
+        // Manager/Owner Menu: Focus on managing schedules
+        keyboard = {
+            inline_keyboard: [
+                [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+                [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
+                [{ text: "👤 My Profile", callback_data: "cb_my_profile" }],
+            ]
+        };
+    } else {
+        // Regular User Menu: Focus on booking
+        keyboard = {
+            inline_keyboard: [
+                [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
+                [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }],
+                [{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]
+            ]
+        };
+    }
+    await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
+}
+
+async function handleSystemStatus(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const userCount = (await db.collection('users').get()).size;
+        const bookingCount = (await db.collection('bookings').get()).size;
+        const busCount = (await db.collection('buses').get()).size;
+
+        const statusText = `📊 *System Status*\n\n🟢 *Status:* Operational\n👥 *Users:* ${userCount}\n🎫 *Bookings:* ${bookingCount}\n🚌 *Buses:* ${busCount}\n🕒 *Last Check:* ${new Date().toLocaleTimeString('en-IN')}\n\n💡 All database services are functioning normally.`;
+        await sendMessage(chatId, statusText, "Markdown");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END CORE MENU FUNCTION ---
+
 /* --------------------- General Handlers ---------------------- */
 
 async function handleBusSearch(chatId) {
