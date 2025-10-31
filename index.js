@@ -21,12 +21,12 @@ Select an option from the menu below to get started. You can also type commands 
   
   // Registration
   prompt_role: "🎉 *Welcome to GoRoute!* To get started, please choose your role:",
-  registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]`", // UPDATED PROMPT
+  registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]`", 
   profile_updated: "✅ *Profile Updated!* Your details have been saved.",
-  profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Name] / [Aadhar Number] / [Phone Number]`", // UPDATED ERROR PROMPT
+  profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Name] / [Aadhar Number] / [Phone Number]`", 
   user_not_found: "❌ User not found. Please send /start to register.",
 
-  // Phone Update (NEW)
+  // Phone Update
   update_phone_prompt: "📞 *Update Phone:* Please enter your new 10-digit phone number now.",
   phone_updated_success: "✅ Phone number updated successfully!",
   phone_invalid: "❌ Invalid phone number. Please enter a 10-digit number only.",
@@ -35,13 +35,13 @@ Select an option from the menu below to get started. You can also type commands 
   booking_type_prompt: "👤 *Booking Seats:* Please select your booking type:",
   gender_prompt: "🚻 *Seat Safety:* Is the passenger booking seat {seatNo} a Male or Female?",
   safety_violation: "🚫 *Seat Safety Violation:* A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
-  details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`", // BOOKING DETAIL PROMPT
+  details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`", 
   booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n*What's next?*",
   booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!",
   booking_details_error: "❌ *Error!* Please provide details in the format: `[Name] / [Age] / [Aadhar Number]`",
   seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
   no_bookings: "📭 You don't have any active bookings.",
-  booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.",
+  booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", // NEW REFUND MESSAGE
   
   // Manager
   manager_add_bus_init: "📝 *Bus Creation:* Enter the new Bus ID (e.g., `BUS201`):",
@@ -51,7 +51,7 @@ Select an option from the menu below to get started. You can also type commands 
   manager_add_bus_depart_date: "📅 Enter the Departure Date (YYYY-MM-DD, e.g., `2025-12-25`):",
   manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
   manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
-  manager_add_bus_manager_phone: "📞 *Final Step:* Enter your Phone Number to associate with the bus:", // NEW PROMPT
+  manager_add_bus_manager_phone: "📞 *Final Step:* Enter your Phone Number to associate with the bus:",
   manager_bus_saved: "✅ *Bus {busID} created and tracking enabled!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
@@ -61,6 +61,10 @@ Select an option from the menu below to get started. You can also type commands 
   tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
   tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
   tracking_passenger_info: "🚍 *Live Tracking - {busID}*\n\n📍 *Last Location:* {location}\n🕒 *Last Updated:* {time}\n\n_Note: Location updates every 15 minutes_",
+
+  // Notifications (NEW)
+  manager_notification_booking: "🔔 *NEW BOOKING CONFIRMED!*\n\nBus: {busID}\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}",
+  manager_notification_cancellation: "⚠️ *BOOKING CANCELLED*\n\nBooking ID: {bookingId}\nBus: {busID}\nSeats: {seats}\nTime: {dateTime}",
 
   // General
   db_error: "❌ CRITICAL ERROR: The bot's database is not connected. Please contact support."
@@ -399,6 +403,8 @@ async function handleCancellation(chatId, text) {
         if (!bookingDoc.exists || bookingDoc.data().chat_id !== String(chatId)) {
             return await sendMessage(chatId, `❌ Booking ${bookingId} not found or you don't have permission to cancel it.`);
         }
+        
+        const refundTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }); // Get current time for refund message
 
         const batch = db.batch();
         const bookingData = bookingDoc.data();
@@ -411,7 +417,16 @@ async function handleCancellation(chatId, text) {
         });
 
         await batch.commit();
-        await sendMessage(chatId, MESSAGES.booking_cancelled.replace('{bookingId}', bookingId), "Markdown");
+        
+        // 1. Send User Confirmation with Refund Time
+        await sendMessage(chatId, MESSAGES.booking_cancelled.replace('{bookingId}', bookingId).replace('{dateTime}', refundTime), "Markdown");
+        
+        // 2. Send Manager Notification (NEW)
+        await sendManagerNotification(bookingData.bus_id, 'CANCELLATION', { 
+            bookingId: bookingId,
+            seats: bookingData.seats,
+            dateTime: refundTime
+        });
 
     } catch (e) {
         console.error('❌ Cancellation error:', e.message);
@@ -784,6 +799,7 @@ async function finalizeBooking(chatId, booking) {
         const db = getFirebaseDb();
         const bookingId = 'BOOK' + Date.now();
         const batch = db.batch();
+        const dateTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
         const bookingRef = db.collection('bookings').doc(bookingId);
         batch.set(bookingRef, {
@@ -809,7 +825,15 @@ async function finalizeBooking(chatId, booking) {
         batch.delete(db.collection('user_state').doc(String(chatId)));
         
         await batch.commit();
+        
+        // 1. Send Manager Notification (NEW)
+        await sendManagerNotification(booking.busID, 'BOOKING', { 
+            seats: booking.seats,
+            passengerName: booking.passengers[0].name,
+            dateTime: dateTime
+        });
 
+        // 2. Send User Confirmation
         await sendMessage(chatId, MESSAGES.booking_finish.replace('{bookingId}', bookingId).replace('{count}', booking.passengers.length), "Markdown");
 
     } catch (error) {
@@ -1137,6 +1161,43 @@ async function getBusInfo(busID) {
     } catch (e) {
         console.error("Error fetching bus info:", e.message);
         return null;
+    }
+}
+
+// NEW: Sends notification to the Bus Manager
+async function sendManagerNotification(busID, type, details) {
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        
+        // Check if bus exists and has an associated manager
+        if (!busDoc.exists || !busDoc.data().tracking_manager_id) return; 
+
+        const managerChatId = busDoc.data().tracking_manager_id;
+        const now = details.dateTime; // Use the formatted time passed from the handler
+
+        let notificationText = '';
+        if (type === 'BOOKING') {
+            const seatList = details.seats.map(s => s.seatNo).join(', ');
+            notificationText = MESSAGES.manager_notification_booking
+                .replace('{busID}', busID)
+                .replace('{seats}', seatList)
+                .replace('{passengerName}', details.passengerName)
+                .replace('{dateTime}', now);
+        } else if (type === 'CANCELLATION') {
+            const seatsList = details.seats.join(', ');
+            notificationText = MESSAGES.manager_notification_cancellation
+                .replace('{bookingId}', details.bookingId)
+                .replace('{busID}', busID)
+                .replace('{seats}', seatsList)
+                .replace('{dateTime}', now);
+        }
+
+        if (notificationText) {
+            await sendMessage(managerChatId, notificationText, "Markdown");
+        }
+    } catch (e) {
+        console.error("Error sending manager notification:", e.message);
     }
 }
 
