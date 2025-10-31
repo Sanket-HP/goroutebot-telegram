@@ -62,9 +62,11 @@ function getFirebaseDb() {
       return db;
     }
     
+    // --- SAFETY CHECK ---
     const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
     if (!rawCredsBase64) {
-      throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined.");
+      // This is the CRITICAL ERROR handler. It throws, so the caller can send a message.
+      throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
     }
     
     const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
