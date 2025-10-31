@@ -753,6 +753,27 @@ async function unlockSeats(booking) {
     }
 }
 
+// Gets bus info from the 'buses' collection
+async function getBusInfo(busID) {
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('buses').where('bus_id', '==', busID).limit(1).get();
+        if (snapshot.empty) return null;
+        
+        const data = snapshot.docs[0].data();
+        return {
+            busID: data.bus_id,
+            from: data.from,
+            to: data.to,
+            date: data.departure_time.split(' ')[0],
+            time: data.departure_time.split(' ')[1]
+        };
+    } catch (e) {
+        console.error("Error fetching bus info:", e.message);
+        return null;
+    }
+}
+
 
 /* --------------------- Telegram Axios Helpers ---------------------- */
 
