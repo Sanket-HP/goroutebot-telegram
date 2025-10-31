@@ -48,6 +48,12 @@ Select an option from the menu below to get started. You can also type commands 
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
 
+  // Tracking
+  tracking_manager_prompt: "📍 *Live Tracking Setup:* Enter the Bus ID you wish to track/update (e.g., `BUS101`).",
+  tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
+  tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
+  tracking_passenger_info: "🚍 *Live Tracking - {busID}*\n\n📍 *Last Location:* New Delhi Station\n🕒 *Last Updated:* {time}\n\n_Note: Location updates every 15 minutes_",
+
   // General
   db_error: "❌ CRITICAL ERROR: The bot's database is not connected. Please contact support."
 };
@@ -123,6 +129,9 @@ app.post('/api/webhook', async (req, res) => {
         await handleRoleSelection(chatId, callback.from, callbackData);
       } else if (callbackData === 'cb_book_bus') {
         await handleBusSearch(chatId);
+      } else if (callbackData === 'cb_booking_single' || callbackData === 'cb_booking_couple' || callbackData === 'cb_booking_family') { // NEW: Booking Type Selection
+        // For now, all booking types lead to showing buses
+        await showAvailableBuses(chatId);
       } else if (callbackData === 'cb_my_booking') {
         await handleBookingInfo(chatId);
       } else if (callbackData === 'cb_my_profile') {
@@ -164,6 +173,8 @@ async function handleUserMessage(chatId, text, user) {
          await handleBookingInput(chatId, text, state);
       } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
          await handleManagerInput(chatId, text, state);
+      } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { // NEW: Tracking Setup State
+         await handleLiveTrackingSetupInput(chatId, text, state);
       }
       return;
   }
@@ -193,8 +204,11 @@ async function handleUserMessage(chatId, text, user) {
   else if (textLower === 'my profile' || textLower === '/profile') {
     await handleUserProfile(chatId);
   }
-  else if (textLower.startsWith('add seats')) { // NEW COMMAND: Add Seats
+  else if (textLower.startsWith('add seats')) {
     await handleAddSeatsCommand(chatId, text);
+  }
+  else if (textLower.startsWith('live tracking')) { // NEW: Manager or Passenger Command
+    await handleLiveTracking(chatId, text);
   }
   else if (textLower === 'help' || textLower === '/help') {
     await sendHelpMessage(chatId);
@@ -206,6 +220,18 @@ async function handleUserMessage(chatId, text, user) {
 
 /* --------------------- CORE HANDLERS (DEFINED FIRST TO AVOID CRASHES) ---------------------- */
 
+// Helper function to get user's current role
+async function getUserRole(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('users').doc(String(chatId)).get();
+        if (doc.exists) return doc.data().role;
+        return 'unregistered';
+    } catch (e) {
+        return 'error';
+    }
+}
+
 // --- CORE MENU FUNCTION ---
 async function sendHelpMessage(chatId) {
     const userRole = await getUserRole(chatId);
@@ -216,6 +242,7 @@ async function sendHelpMessage(chatId) {
         keyboard = {
             inline_keyboard: [
                 [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+                [{ text: "📍 Start Tracking", callback_data: "cb_start_tracking" }], // New Tracking Button
                 [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
                 [{ text: "👤 My Profile", callback_data: "cb_my_profile" }],
             ]
@@ -250,21 +277,8 @@ async function handleSystemStatus(chatId) {
 
 /* --------------------- General Handlers ---------------------- */
 
-async function handleBusSearch(chatId) {
-    // NEW: Prompts user to select booking type before showing buses
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "🧍 Single Passenger", callback_data: "cb_booking_single" }],
-            [{ text: "🧑‍🤝‍🧑 Couple / Husband-Wife (WIP)", callback_data: "cb_booking_couple" }],
-            [{ text: "👪 Family / Group (WIP)", callback_data: "cb_booking_family" }],
-        ]
-    };
-    await sendMessage(chatId, MESSAGES.booking_type_prompt, "Markdown", keyboard);
-    // Note: The logic for showing the actual buses needs to be moved to a callback handler
-    // that fires after the user chooses the type (cb_booking_single).
-    // For now, let's keep the existing logic, which sends the bus list directly.
-    
-    // --- Existing Logic to Show Buses (Temporary) ---
+// NEW: Function to show buses, used by callback
+async function showAvailableBuses(chatId) {
     try {
         const db = getFirebaseDb();
         const snapshot = await db.collection('buses').get();
@@ -296,7 +310,18 @@ async function handleBusSearch(chatId) {
         console.error('❌ Bus search error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
-    // --- End Existing Logic ---
+}
+
+async function handleBusSearch(chatId) {
+    // Shows the new booking type buttons
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "🧍 Single Passenger", callback_data: "cb_booking_single" }],
+            [{ text: "🧑‍🤝‍🧑 Couple / Husband-Wife (WIP)", callback_data: "cb_booking_couple" }],
+            [{ text: "👪 Family / Group (WIP)", callback_data: "cb_booking_family" }],
+        ]
+    };
+    await sendMessage(chatId, MESSAGES.booking_type_prompt, "Markdown", keyboard);
 }
 
 async function handleCancellation(chatId, text) {
@@ -458,28 +483,6 @@ async function handleBookingInfo(chatId) {
     } catch (e) {
         await sendMessage(chatId, MESSAGES.db_error);
     }
-}
-
-async function handleSystemStatus(chatId) {
-    try {
-        const db = getFirebaseDb();
-        const userCount = (await db.collection('users').get()).size;
-        const bookingCount = (await db.collection('bookings').get()).size;
-        const busCount = (await db.collection('buses').get()).size;
-
-        const statusText = `📊 *System Status*\n\n🟢 *Status:* Operational\n👥 *Users:* ${userCount}\n🎫 *Bookings:* ${bookingCount}\n🚌 *Buses:* ${busCount}\n🕒 *Last Check:* ${new Date().toLocaleTimeString('en-IN')}\n\n💡 All database services are functioning normally.`;
-        await sendMessage(chatId, statusText, "Markdown");
-    } catch (e) {
-        await sendMessage(chatId, MESSAGES.db_error);
-    }
-}
-
-async function handleLiveTracking(chatId, text) {
-  await sendMessage(chatId, MESSAGES.feature_wip, "Markdown");
-}
-
-async function handleSetLanguage(chatId, language) {
-  await sendMessage(chatId, MESSAGES.feature_wip);
 }
 
 
@@ -906,17 +909,6 @@ async function saveAppState(chatId, stateName, data) {
         data: data,
         updated_at: admin.firestore.FieldValue.serverTimestamp()
     });
-}
-
-async function getUserRole(chatId) {
-    try {
-        const db = getFirebaseDb();
-        const doc = await db.collection('users').doc(String(chatId)).get();
-        if (doc.exists) return doc.data().role;
-        return 'unregistered';
-    } catch (e) {
-        return 'error';
-    }
 }
 
 async function unlockSeats(booking) {
