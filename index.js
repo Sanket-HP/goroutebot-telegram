@@ -21,17 +21,16 @@ Select an option from the menu below to get started. You can also type commands 
   
   // Registration
   prompt_role: "🎉 *Welcome to GoRoute!* To get started, please choose your role:",
-  registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number]`",
+  registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]`", // UPDATED PROMPT
   profile_updated: "✅ *Profile Updated!* Your details have been saved.",
-  profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Your Name] / [Your Aadhar]`",
+  profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Name] / [Aadhar Number] / [Phone Number]`", // UPDATED ERROR PROMPT
   user_not_found: "❌ User not found. Please send /start to register.",
 
   // Booking
   booking_type_prompt: "👤 *Booking Seats:* Please select your booking type:",
   gender_prompt: "🚻 *Seat Safety:* Is the passenger booking seat {seatNo} a Male or Female?",
   safety_violation: "🚫 *Seat Safety Violation:* A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
-  details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`",
-  
+  details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`", // BOOKING DETAIL PROMPT
   booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n*What's next?*",
   booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!",
   booking_details_error: "❌ *Error!* Please provide details in the format: `[Name] / [Age] / [Aadhar Number]`",
@@ -47,7 +46,8 @@ Select an option from the menu below to get started. You can also type commands 
   manager_add_bus_depart_date: "📅 Enter the Departure Date (YYYY-MM-DD, e.g., `2025-12-25`):",
   manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
   manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
-  manager_bus_saved: "✅ *Bus {busID} created!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
+  manager_add_bus_manager_phone: "📞 *Final Step:* Enter your Phone Number to associate with the bus:", // NEW PROMPT
+  manager_bus_saved: "✅ *Bus {busID} created and tracking enabled!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
 
@@ -410,13 +410,16 @@ async function handleRoleSelection(chatId, user, callbackData) {
 
 async function handleProfileUpdate(chatId, text) {
   try {
-    const match = text.match(/my profile details\s+([^\/]+)\s*\/\s*(\d+)/i);
+    // NEW REGEX: Expects [Name] / [Aadhar] / [Phone]
+    const match = text.match(/my profile details\s+([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
+    
     if (!match) {
       await sendMessage(chatId, MESSAGES.profile_update_error, "Markdown");
       return;
     }
     const name = match[1].trim();
     const aadhar = match[2].trim();
+    const phone = match[3].trim(); // New Phone variable
 
     const db = getFirebaseDb();
     const userRef = db.collection('users').doc(String(chatId));
@@ -427,7 +430,8 @@ async function handleProfileUpdate(chatId, text) {
       return;
     }
     
-    await userRef.update({ name: name, aadhar: aadhar, status: 'active' });
+    // NEW UPDATE: Update all three fields
+    await userRef.update({ name: name, aadhar: aadhar, phone: phone, status: 'active' });
     await sendMessage(chatId, MESSAGES.profile_updated, "Markdown");
     await handleUserProfile(chatId);
 
@@ -449,7 +453,7 @@ async function handleUserProfile(chatId) {
       const profileText = `👤 *Your Profile*\n\n` +
                           `*Name:* ${user.name || 'Not set'}\n` +
                           `*Chat ID:* ${user.chat_id}\n` +
-                          `*Phone:* ${user.phone || 'Not set'}\n` +
+                          `*Phone:* ${user.phone || 'Not set'}\n` + // Phone Display
                           `*Aadhar:* ${user.aadhar || 'Not set'}\n` +
                           `*Role:* ${user.role || 'user'}\n` +
                           `*Status:* ${user.status || 'N/A'}\n` +
@@ -548,7 +552,7 @@ async function handleSeatMap(chatId, text) {
 
     let seatMap = `🚍 *Seat Map - ${busID}*\n`;
     seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
-    seatMap += `🕒 ${busInfo.date} ${busInfo.time}\n\n`;
+    seatMap += `📅 ${busInfo.date} 🕒 ${busInfo.time}\n\n`; // Updated to show both date/time
     seatMap += `Legend: 🟩 Available • ⚫M Booked Male • ⚫F Booked Female\n\n`; // UPDATED LEGEND
 
     for (let row = 1; row <= 10; row++) {
@@ -869,6 +873,7 @@ async function handleManagerInput(chatId, text, state) {
 
     const timeRegex = /^\d{2}:\d{2}$/;
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    const phoneRegex = /^\d{10}$/;
 
     try {
         switch (state.state) {
@@ -917,19 +922,33 @@ async function handleManagerInput(chatId, text, state) {
             case 'MANAGER_ADD_BUS_ARRIVE_TIME':
                 if (!text.match(timeRegex)) return await sendMessage(chatId, "❌ Invalid time format (HH:MM). Try again:", "Markdown");
                 data.arriveTime = text;
+                nextState = 'MANAGER_ADD_BUS_MANAGER_PHONE'; // NEW STATE
+                response = MESSAGES.manager_add_bus_manager_phone;
+                break;
+
+            case 'MANAGER_ADD_BUS_MANAGER_PHONE': // NEW LOGIC
+                data.managerPhone = text.replace(/[^0-9]/g, '');
+                if (!data.managerPhone.match(phoneRegex)) return await sendMessage(chatId, "❌ Invalid Phone Number. Enter a 10-digit number:", "Markdown");
                 
                 const userDoc = await db.collection('users').doc(String(chatId)).get();
                 const ownerName = userDoc.exists ? userDoc.data().name : 'System Owner';
 
-                // 1. Create Bus Document
+                // 1. Update Manager's Phone Number in their Profile
+                if (userDoc.exists) {
+                    await db.collection('users').doc(String(chatId)).update({
+                        phone: data.managerPhone // Update profile phone
+                    });
+                }
+
+                // 2. Create Bus Document
                 await db.collection('buses').doc(data.busID).set({
                     bus_id: data.busID,
                     owner: ownerName,
                     from: data.route.split(' to ')[0].trim(),
                     to: data.route.split(' to ')[1].trim(),
-                    // Combine date and time
                     departure_time: `${data.departDate} ${data.departTime}`, 
                     arrival_time: data.arriveTime,
+                    manager_phone: data.managerPhone, // Save phone to bus record
                     price: data.price,
                     bus_type: data.busType,
                     total_seats: 40, 
@@ -937,7 +956,7 @@ async function handleManagerInput(chatId, text, state) {
                     status: 'scheduled'
                 });
                 
-                // 2. Clear state and notify manager
+                // 3. Clear state and notify manager
                 await db.collection('user_state').doc(String(chatId)).delete(); 
 
                 response = MESSAGES.manager_bus_saved
