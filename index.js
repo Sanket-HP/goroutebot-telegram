@@ -35,13 +35,13 @@ Select an option from the menu below to get started. You can also type commands 
   booking_type_prompt: "👤 *Booking Seats:* Please select your booking type:",
   gender_prompt: "🚻 *Seat Safety:* Is the passenger booking seat {seatNo} a Male or Female?",
   safety_violation: "🚫 *Seat Safety Violation:* A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
-  details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`", 
+  details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`",
   booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n*What's next?*",
   booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!",
   booking_details_error: "❌ *Error!* Please provide details in the format: `[Name] / [Age] / [Aadhar Number]`",
   seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
   no_bookings: "📭 You don't have any active bookings.",
-  booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", // NEW REFUND MESSAGE
+  booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
   
   // Manager
   manager_add_bus_init: "📝 *Bus Creation:* Enter the new Bus ID (e.g., `BUS201`):",
@@ -61,8 +61,13 @@ Select an option from the menu below to get started. You can also type commands 
   tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
   tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
   tracking_passenger_info: "🚍 *Live Tracking - {busID}*\n\n📍 *Last Location:* {location}\n🕒 *Last Updated:* {time}\n\n_Note: Location updates every 15 minutes_",
+  
+  // Inventory Sync (NEW)
+  sync_setup_init: "🔗 *Sync Setup:* Enter the Bus ID for the inventory system setup (e.g., `BUS101`).",
+  sync_setup_url: "🌐 Enter the external OSP API URL/Endpoint for bus {busID}:",
+  sync_success: "✅ *Sync Setup Complete!* Bus {busID} is now linked to external inventory at {url}. Sync status is 'Pending Sync'.",
 
-  // Notifications (NEW)
+  // Notifications
   manager_notification_booking: "🔔 *NEW BOOKING CONFIRMED!*\n\nBus: {busID}\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}",
   manager_notification_cancellation: "⚠️ *BOOKING CANCELLED*\n\nBooking ID: {bookingId}\nBus: {busID}\nSeats: {seats}\nTime: {dateTime}",
 
@@ -89,7 +94,6 @@ function getFirebaseDb() {
     // --- SAFETY CHECK ---
     const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
     if (!rawCredsBase64) {
-      // This is the CRITICAL ERROR handler. It throws, so the caller can send a message.
       throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
     }
     
@@ -142,7 +146,6 @@ app.post('/api/webhook', async (req, res) => {
       } else if (callbackData === 'cb_book_bus') {
         await handleBusSearch(chatId);
       } else if (callbackData === 'cb_booking_single' || callbackData === 'cb_booking_couple' || callbackData === 'cb_booking_family') { // NEW: Booking Type Selection
-        // For now, all booking types lead to showing buses
         await showAvailableBuses(chatId);
       } else if (callbackData === 'cb_my_booking') {
         await handleBookingInfo(chatId);
@@ -150,15 +153,17 @@ app.post('/api/webhook', async (req, res) => {
         await handleUserProfile(chatId);
       } else if (callbackData === 'cb_add_bus_manager') {
         await handleManagerAddBus(chatId);
-      } else if (callbackData === 'cb_start_tracking') { // Manager Start Tracking Button
+      } else if (callbackData === 'cb_start_tracking') { 
         await handleManagerLiveTrackingSetup(chatId);
-      } else if (callbackData === 'cb_update_phone') { // NEW: Update Phone Button
+      } else if (callbackData === 'cb_inventory_sync') { // NEW: Inventory Sync Button
+        await handleInventorySyncSetup(chatId);
+      } else if (callbackData === 'cb_update_phone') { 
         await handleUpdatePhoneNumberCallback(chatId);
-      } else if (callbackData.startsWith('cb_select_gender_')) { // NEW: Gender selection callback
+      } else if (callbackData.startsWith('cb_select_gender_')) { 
         await handleGenderSelectionCallback(chatId, callbackData);
-      } else if (callbackData === 'cb_add_passenger') { // NEW: Add Passenger button click
+      } else if (callbackData === 'cb_add_passenger') { 
         await handleAddPassengerCallback(chatId);
-      } else if (callbackData === 'cb_book_finish') { // NEW: Finish Booking button click
+      } else if (callbackData === 'cb_book_finish') { 
         const state = await getAppState(chatId);
         if (state.state.startsWith('AWAITING_BOOKING_ACTION')) {
             await finalizeBooking(chatId, state.data);
@@ -189,10 +194,12 @@ async function handleUserMessage(chatId, text, user) {
          await handleBookingInput(chatId, text, state);
       } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
          await handleManagerInput(chatId, text, state);
-      } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { // Tracking Setup State
+      } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
          await handleLiveTrackingSetupInput(chatId, text, state);
-      } else if (state.state === 'AWAITING_NEW_PHONE') { // NEW: Phone Update State
+      } else if (state.state === 'AWAITING_NEW_PHONE') { 
          await handlePhoneUpdateInput(chatId, text);
+      } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) { // NEW: Sync Setup State
+         await handleInventorySyncInput(chatId, text, state);
       }
       return;
   }
@@ -205,7 +212,7 @@ async function handleUserMessage(chatId, text, user) {
     await handleProfileUpdate(chatId, text);
   }
   else if (textLower === 'book bus' || textLower === '/book') {
-    await handleBusSearch(chatId); // New flow leads to type selection
+    await handleBusSearch(chatId); 
   }
   else if (textLower.startsWith('show seats')) {
     await handleSeatMap(chatId, text);
@@ -225,7 +232,7 @@ async function handleUserMessage(chatId, text, user) {
   else if (textLower.startsWith('add seats')) {
     await handleAddSeatsCommand(chatId, text);
   }
-  else if (textLower.startsWith('live tracking')) { // NEW: Manager or Passenger Command
+  else if (textLower.startsWith('live tracking')) { 
     await handleLiveTracking(chatId, text);
   }
   else if (textLower === 'help' || textLower === '/help') {
@@ -262,6 +269,7 @@ async function sendHelpMessage(chatId) {
     if (userRole === 'manager' || userRole === 'owner') {
         baseButtons = [
             [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+            [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }], // NEW BUTTON
             [{ text: "📍 Start Tracking", callback_data: "cb_start_tracking" }], 
             [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
         ];
