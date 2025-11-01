@@ -46,20 +46,39 @@ Select an option from the menu below to get started. You can also type commands 
     safety_violation: "🚫 <b>Seat Safety Violation:</b> A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
     details_prompt: "✍️ <b>Passenger Details:</b> Please enter the passenger's Name, Age, and Aadhar number in this format:\n<pre>[Name] / [Age] / [Aadhar Number]</pre>",
     booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n<b>What's next?</b>",
-    booking_finish: "🎫 <b>Booking Confirmed!</b> Your seats are reserved.\n\n<b>Booking ID:</b> {bookingId}\n<b>Total Seats:</b> {count}\n\nThank you for choosing GoRoute!\n\nYour E-Ticket has been successfully processed.", 
-    booking_details_error: "❌ <b>Error!</b> Please provide details in the format: <pre>[Name] / [Age] / [Aadhar Number]</pre>",
-    seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
-    no_bookings: "📭 You don't have any active bookings.",
-    booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.", 
     
     // Payment
-    // Note: Anchor tags use href for the payment link
+    // NOTE: booking_finish is replaced by payment_confirmed_ticket which is used in commitFinalBookingBatch
     payment_required: "💰 <b>Payment Required:</b> Total Amount: ₹{amount} INR.\n\n<b>Order ID: {orderId}</b>\n\n<a href='{paymentUrl}'>Click here to pay</a>\n\n<i>(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)</i>",
     payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).\n\nSelect an option below once payment is complete or if you wish to cancel.",
     payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
     session_cleared: "🧹 <b>Previous booking session cleared.</b> Your locked seats have been released.",
 
+    // New detailed confirmation
+    payment_confirmed_ticket: `✅ <b>Payment Confirmed & E-Ticket Issued!</b>
+    
+🎫 <b>E-Ticket Details</b>
+Bus: {busName} ({busType})
+Route: {from} → {to}
+Date: {journeyDate}
+Departure: {departTime}
+Seats: {seatList}
 
+👤 <b>Passenger Info (Primary)</b>
+Name: {name}
+Phone: {phone}
+
+💰 <b>Transaction Details</b>
+Order ID: {orderId}
+Amount Paid: ₹{amount} INR
+Time: {dateTime}
+`,
+
+    booking_details_error: "❌ <b>Error!</b> Please provide details in the format: <pre>[Name] / [Age] / [Aadhar Number]</pre>",
+    seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
+    no_bookings: "📭 You don't have any active bookings.",
+    booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.", 
+    
     // Manager
     manager_add_bus_init: "📝 <b>Bus Creation:</b> Enter the <b>Bus Number</b> (e.g., <pre>MH-12 AB 1234</pre>):",
     manager_add_bus_number: "🚌 Enter the <b>Bus Name</b> (e.g., <pre>Sharma Travels</pre>):",
@@ -260,6 +279,8 @@ async function getBusInfo(busID) {
 async function sendManagerNotification(busID, type, details) {
     try {
         const db = getFirebaseDb();
+        // NOTE: In a real system, we would query the bus document by ID. 
+        // Assuming busID is the document ID for 'buses' collection.
         const busDoc = await db.collection('buses').doc(busID).get();
         
         if (!busDoc.exists || !busDoc.data().tracking_manager_id) return; 
@@ -968,6 +989,14 @@ async function commitFinalBookingBatch(chatId, booking) {
     const batch = db.batch();
     const dateTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
+    // 1. Fetch User and Bus Details for the ticket
+    const userDoc = await db.collection('users').doc(String(chatId)).get();
+    const busDoc = await db.collection('buses').doc(booking.busID).get();
+
+    const userData = userDoc.exists ? userDoc.data() : {};
+    const busData = busDoc.exists ? busDoc.data() : {};
+    
+    // 2. Commit Booking Record
     const bookingRef = db.collection('bookings').doc(booking.bookingId);
     batch.set(bookingRef, {
         booking_id: booking.bookingId,
@@ -982,6 +1011,7 @@ async function commitFinalBookingBatch(chatId, booking) {
         created_at: admin.firestore.FieldValue.serverTimestamp()
     });
 
+    // 3. Update Seat Statuses
     booking.seats.forEach(seat => {
         const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
         batch.update(seatRef, { 
@@ -991,18 +1021,38 @@ async function commitFinalBookingBatch(chatId, booking) {
         });
     });
 
+    // 4. Clean up state and payment session
     batch.delete(db.collection('user_state').doc(String(chatId)));
     batch.delete(db.collection('payment_sessions').doc(booking.razorpay_order_id));
     
     await batch.commit();
 
+    // 5. Send Manager Notification
     await sendManagerNotification(booking.busID, 'BOOKING', { 
         seats: booking.seats,
         passengerName: booking.passengers[0].name,
         dateTime: dateTime
     });
+    
+    // 6. Send Detailed Ticket Confirmation to User
+    const seatList = booking.seats.map(s => s.seatNo).join(', ');
+    const [journeyDate, departTime] = (busData.departure_time || 'N/A N/A').split(' ');
 
-    await sendMessage(chatId, MESSAGES.booking_finish.replace('{bookingId}', booking.bookingId).replace('{count}', booking.passengers.length), "HTML");
+    const ticketMessage = MESSAGES.payment_confirmed_ticket
+        .replace('{busName}', busData.bus_name || 'N/A')
+        .replace('{busType}', busData.bus_type || 'N/A')
+        .replace('{from}', busData.from || 'N/A')
+        .replace('{to}', busData.to || 'N/A')
+        .replace('{journeyDate}', journeyDate)
+        .replace('{departTime}', departTime)
+        .replace('{seatList}', seatList)
+        .replace('{name}', userData.name || 'N/A')
+        .replace('{phone}', userData.phone || 'N/A')
+        .replace('{orderId}', booking.razorpay_order_id)
+        .replace('{amount}', (booking.total_amount / 100).toFixed(2)) // Convert paise to INR
+        .replace('{dateTime}', dateTime);
+
+    await sendMessage(chatId, ticketMessage, "HTML");
 }
 
 async function handlePaymentVerification(chatId, booking) {
@@ -1541,6 +1591,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
                 // Payment failed, release seats
                 await unlockSeats(bookingData);
                 await db.collection('payment_sessions').doc(orderId).delete();
+                // Send specific payment failed message
                 await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
             }
         }
