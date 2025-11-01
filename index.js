@@ -541,7 +541,7 @@ async function startUserRegistration(chatId, user) {
         if (doc.exists) {
              // FIX: Add safety check for user.first_name to prevent string replacement errors
             const userName = user.first_name || 'User'; 
-            await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
+                await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
             await sendHelpMessage(chatId); 
         } else {
             const keyboard = {
