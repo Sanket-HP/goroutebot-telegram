@@ -223,7 +223,7 @@ async function handleUserMessage(chatId, text, user) {
     await handleProfileUpdate(chatId, text);
   }
   else if (textLower === 'book bus' || textLower === '/book') {
-    await handleBusSearch(chatId); 
+    await handleBusSearch(chatId); // New flow leads to type selection
   }
   else if (textLower.startsWith('show seats')) {
     await handleSeatMap(chatId, text);
@@ -1179,6 +1179,64 @@ async function handleAddSeatsCommand(chatId, text) {
     }
 }
 
+// --- NEW MANAGER COMMAND HANDLER (Inventory Sync) ---
+async function handleInventorySyncSetup(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+         return await sendMessage(chatId, "❌ You do not have permission to manage inventory sync.");
+    }
+    
+    await saveAppState(chatId, 'MANAGER_SYNC_SETUP_BUSID', {});
+    await sendMessage(chatId, MESSAGES.sync_setup_init, "Markdown");
+}
+
+async function handleInventorySyncInput(chatId, text, state) {
+    const db = getFirebaseDb();
+    const data = state.data;
+    let nextState = '';
+    let response = '';
+    const urlRegex = /^(http|https):\/\/[^ "]+$/; // Basic URL validation
+
+    try {
+        switch (state.state) {
+            case 'MANAGER_SYNC_SETUP_BUSID':
+                data.busID = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                const busDoc = await db.collection('buses').doc(data.busID).get();
+                if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID ${data.busID} does not exist. Please create it first.`);
+                
+                nextState = 'MANAGER_SYNC_SETUP_URL';
+                response = MESSAGES.sync_setup_url.replace('{busID}', data.busID);
+                break;
+                
+            case 'MANAGER_SYNC_SETUP_URL':
+                data.syncUrl = text.trim();
+                if (!data.syncUrl.match(urlRegex)) return await sendMessage(chatId, "❌ Invalid URL format. Must start with http:// or https://. Try again:");
+                
+                // 1. Update Bus Document with sync URL and status
+                await db.collection('buses').doc(data.busID).update({
+                    osp_api_endpoint: data.syncUrl,
+                    sync_status: 'Pending Sync',
+                    last_sync_attempt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                
+                // 2. Clear state and notify manager
+                await saveAppState(chatId, 'IDLE', {}); 
+
+                response = MESSAGES.sync_success.replace('{busID}', data.busID).replace('{url}', data.syncUrl);
+                await sendMessage(chatId, response, "Markdown");
+                return;
+        }
+
+        await saveAppState(chatId, nextState, data);
+        await sendMessage(chatId, response, "Markdown");
+
+    } catch (error) {
+        console.error('❌ Inventory Sync Flow Error:', error.message);
+        await db.collection('user_state').doc(String(chatId)).delete(); 
+        await sendMessage(chatId, MESSAGES.db_error + " Inventory sync setup failed. Please try again.");
+    }
+}
+
 
 /* --------------------- Shared Helper Functions ---------------------- */
 
@@ -1268,6 +1326,60 @@ async function sendManagerNotification(busID, type, details) {
         }
     } catch (e) {
         console.error("Error sending manager notification:", e.message);
+    }
+}
+
+
+/* --------------------- Live Tracking Cron Logic ---------------------- */
+
+// This function is executed by the external Vercel Cron Job
+async function sendLiveLocationUpdates() {
+    const db = getFirebaseDb();
+    const updates = [];
+    let updatesSent = 0;
+
+    try {
+        // Find all buses that have a manager assigned (meaning tracking is enabled)
+        const busesSnapshot = await db.collection('buses').where('tracking_manager_id', '!=', null).get();
+
+        const currentTime = new Date();
+        const notificationTime = currentTime.toLocaleTimeString('en-IN');
+        const mockLocation = ["New Delhi Station", "Mumbai Central", "Pune Junction", "Jaipur Highway", "Bus is en route"];
+        
+        // Loop through all active tracking buses
+        busesSnapshot.forEach(busDoc => {
+            const data = busDoc.data();
+            const busID = data.bus_id;
+            const managerId = data.tracking_manager_id;
+            
+            // Generate a random mock location
+            const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
+
+            // Update the bus document with a new, mock location and time
+            busDoc.ref.update({
+                last_location_time: admin.firestore.FieldValue.serverTimestamp(),
+                last_location_name: randomLocation
+            });
+
+            // 1. Notify the Manager (as proof the cron job ran)
+            const managerNotification = MESSAGES.tracking_passenger_info
+                .replace('{busID}', busID)
+                .replace('{location}', randomLocation)
+                .replace('{time}', notificationTime);
+            
+            updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "Markdown"));
+            updatesSent++;
+
+            // 2. NOTE: In a production system, you would query the 'bookings' collection here
+            // to find and notify every passenger of this bus.
+        });
+
+        await Promise.all(updates);
+        return { updatesSent };
+
+    } catch (error) {
+        console.error("CRON JOB FAILED during update loop:", error.message);
+        throw error;
     }
 }
 
