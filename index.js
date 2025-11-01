@@ -12,830 +12,1424 @@ const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 // --- Razorpay Initialization ---
 const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// --- Enhanced MESSAGES with better UX ---
+// --- MESSAGES ---
 const MESSAGES = {
-    welcome: `🎉 *Welcome to GoRoute Bus Booking!* 🚌
+    help: `🆘 *GoRoute Help Center*
 
-I'm your personal bus booking assistant. Here's what I can help you with:
+Select an option from the menu below to get started. You can also type commands like "book bus".`,
+    no_buses: "❌ *No buses available matching your criteria.*\n\nPlease check back later or try different routes.",
+    specify_bus_id: '❌ Please specify the Bus ID.\nExample: "Show seats BUS101"',
+    seat_map_error: '❌ Error generating seat map for {busID}.',
+    no_seats_found: '❌ No seats found in the system for bus {busID}.',
+    feature_wip: '🚧 This feature is coming soon!',
+    welcome_back: '👋 Welcome back, {name}!',
+    
+    // Registration
+    prompt_role: "🎉 *Welcome to GoRoute!* To get started, please choose your role:",
+    registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n\`my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]\`", 
+    profile_updated: "✅ *Profile Updated!* Your details have been saved.",
+    profile_update_error: "❌ *Error!* Please use the correct format:\n\`my profile details [Name] / [Aadhar Number] / [Phone Number]\`", 
+    user_not_found: "❌ User not found. Please send /start to register.",
 
-• 🚌 *Book Buses* - Find and reserve seats
-• 🎫 *My Bookings* - View and manage your trips  
-• 👤 *Profile* - Update your information
-• 📍 *Live Tracking* - Track your bus in real-time
-• 🆘 *Help* - Get assistance anytime
+    // Phone Update
+    update_phone_prompt: "📞 *Update Phone:* Please enter your new 10-digit phone number now.",
+    phone_updated_success: "✅ Phone number updated successfully!",
+    phone_invalid: "❌ Invalid phone number. Please enter a 10-digit number only.",
 
-Ready to travel? Let's get started! 👇`,
+    // Booking
+    booking_type_prompt: "👤 *Booking Seats:* Please select your booking type:",
+    gender_prompt: "🚻 *Seat Safety:* Is the passenger booking seat {seatNo} a Male or Female?",
+    safety_violation: "🚫 *Seat Safety Violation:* A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
+    details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n\`[Name] / [Age] / [Aadhar Number]\`",
+    booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n*What's next?*",
+    booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!\n\nYour E-Ticket has been successfully processed.", 
+    booking_details_error: "❌ *Error!* Please provide details in the format: \`[Name] / [Age] / [Aadhar Number]\`",
+    seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
+    no_bookings: "📭 You don't have any active bookings.",
+    booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
+    
+    // Payment
+    payment_required: "💰 *Payment Required:* Total Amount: ₹{amount} INR.\n\n*Order ID: {orderId}*\n\n[Click here to pay]({paymentUrl})\n\n*(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)*",
+    payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).",
+    payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
 
-    help: `🆘 *GoRoute Help Center*
+    // Manager
+    manager_add_bus_init: "📝 *Bus Creation:* Enter the **Bus Number** (e.g., `MH-12 AB 1234`):",
+    manager_add_bus_number: "🚌 Enter the **Bus Name** (e.g., `Sharma Travels`):",
+    manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
+    manager_add_bus_price: "💰 Enter the Base Price (e.g., `850`):",
+    manager_add_bus_type: "🛋️ Enter the **Bus Seating Layout** (e.g., `Seater`, `Sleeper`, or `Both`):",
+    manager_add_seat_type: "🪑 Enter the seat type for **Row {row}** (e.g., `Sleeper Upper`, `Sleeper Lower`, or `Seater`):",
+    manager_add_bus_depart_date: "📅 Enter the Departure Date (YYYY-MM-DD, e.g., `2025-12-25`):",
+    manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
+    manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
+    manager_add_bus_manager_phone: "📞 *Final Step:* Enter your Phone Number to associate with the bus:",
+    manager_bus_saved: "✅ *Bus {busID} created!* Route: {route}. Next, add seats: \n\n*Next Step:* Now, create all seats for this bus by typing:\n`add seats {busID} 40`",
+    manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
+    manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
+    manager_invalid_layout: "❌ Invalid layout. Please enter `Seater`, `Sleeper`, or `Both`.",
+    manager_invalid_seat_type: "❌ Invalid seat type. Please enter `Sleeper Upper`, `Sleeper Lower`, or `Seater`.",
 
-*Quick Commands:*
-• \`Book bus\` - Search available buses
-• \`Show seats BUS101\` - View seat map
-• \`Book seat BUS101 3A\` - Reserve a seat
-• \`My bookings\` - View your trips
-• \`My profile\` - Check your details
-• \`Cancel booking BOOK123\` - Cancel a booking
-• \`Help\` - Show this message
+    // Tracking
+    tracking_manager_prompt: "📍 *Live Tracking Setup:* Enter the Bus ID you wish to track/update (e.g., `BUS101`).",
+    tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
+    tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
+    tracking_passenger_info: "🚍 *Live Tracking - {busID}*\n\n📍 *Last Location:* {location}\n🕒 *Last Updated:* {time}\n\n_Note: Location updates every 15 minutes_",
 
-Need assistance? Just type your question!`,
+    // Notifications
+    manager_notification_booking: "🔔 *NEW BOOKING CONFIRMED!*\n\nBus: {busID}\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}",
+    manager_notification_cancellation: "⚠️ *BOOKING CANCELLED*\n\nBooking ID: {bookingId}\nBus: {busID}\nSeats: {seats}\nTime: {dateTime}",
 
-    no_buses: "❌ *No buses available right now.*\n\nTry different routes or check back later. Popular routes are usually available in morning and evening.",
-    specify_bus_id: '❌ Please specify the Bus ID.\n\n*Example:* "Show seats BUS101"',
-    seat_map_error: '❌ Unable to load seat map for {busID}. Please check the Bus ID.',
-    no_seats_found: '❌ No seat information found for bus {busID}.',
-    feature_wip: '🚧 *Coming Soon!*\n\nThis feature is currently under development. Stay tuned for updates!',
-    welcome_back: '👋 Welcome back, {name}! Ready for your next journey?',
-    
-    // Registration
-    prompt_role: "🎉 *Welcome to GoRoute!* \n\nPlease choose how you'd like to use our service:",
-    registration_started: "✅ Great! You're registered as *{role}*.\n\n📝 *Next Step:* Complete your profile:\n\nSend: \n\`my profile details [Your Full Name] / [Aadhar Number] / [Phone Number]\`\n\n*Example:*\n\`my profile details Raj Sharma / 123456789012 / 9876543210\`", 
-    profile_updated: "✅ *Profile Updated Successfully!*\n\nYour details have been saved securely.",
-    profile_update_error: "❌ *Format Error*\n\nPlease use exactly this format:\n\`my profile details [Name] / [Aadhar] / [Phone]\`\n\n*Example:*\n\`my profile details Priya Singh / 123456789012 / 9876543210\`", 
-    user_not_found: "❌ *Account Not Found*\n\nPlease send /start to create your account.",
-
-    // Phone Update
-    update_phone_prompt: "📞 *Update Phone Number*\n\nPlease enter your new 10-digit mobile number:",
-    phone_updated_success: "✅ *Phone Number Updated!*\n\nYour contact information has been saved.",
-    phone_invalid: "❌ *Invalid Phone Number*\n\nPlease enter a valid 10-digit number (without +91 or spaces).",
-
-    // Booking
-    booking_type_prompt: "👤 *Booking Type*\n\nAre you booking for yourself or with others?",
-    gender_prompt: "🚻 *Passenger Gender*\n\nIs the passenger for seat *{seatNo}*:",
-    safety_violation: "🚫 *Seat Safety Rule*\n\nSeat *{seatNo}* cannot be booked by a male passenger as it's adjacent to a female-occupied seat.\n\nPlease choose another seat for better comfort and safety.",
-    details_prompt: "✍️ *Passenger Details*\n\nPlease provide:\n\`[Full Name] / [Age] / [Aadhar Number]\`\n\n*Example:*\n\`Raj Kumar / 25 / 123456789012\`",
-    booking_passenger_prompt: "✅ *Details Saved for Seat {seatNo}*\n\nPassenger {count}: {name}",
-    booking_finish: `🎫 *Booking Confirmed!* ✅
-
-*Booking ID:* {bookingId}
-*Bus:* {busID}
-*Seats:* {seats}
-*Passengers:* {count}
-
-💰 *Amount Paid:* ₹{amount}
-📅 *Departure:* {date} at {time}
-
-Your e-ticket will be sent shortly. Thank you for choosing GoRoute! 🚌`,
-
-    booking_details_error: "❌ *Format Error*\n\nPlease use:\n\`[Name] / [Age] / [Aadhar]\`\n\n*Example:*\n\`Amit Kumar / 28 / 123456789012\`",
-    seat_not_available: "❌ *Seat {seatNo} Not Available*\n\nThis seat on bus {busID} is already booked. Please choose another seat.",
-    no_bookings: "📭 *No Active Bookings*\n\nYou don't have any upcoming trips. Start by searching for buses!",
-    booking_cancelled: `🗑️ *Booking Cancelled*
-
-*Booking ID:* {bookingId}
-*Status:* Successfully cancelled
-*Refund:* Will be processed within 6 hours
-
-Your refund will be credited to your original payment method by *{dateTime}*.`,
-
-    // Payment
-    payment_required: `💰 *Payment Required*
-
-*Total Amount:* ₹{amount}
-*Order ID:* {orderId}
-*Seats Held For:* 15 minutes
-
-[👉 Click Here to Pay Now]({paymentUrl})
-
-💡 *Note:* Your ticket will be automatically sent after successful payment.`,
-    
-    payment_awaiting: "⏳ *Awaiting Payment Confirmation*\n\nWe're still processing your payment for Order ID: {orderId}\n\nYour seats are temporarily reserved.",
-    payment_failed: "❌ *Payment Failed*\n\nWe couldn't verify your payment. Your seats have been released.\n\nPlease try booking again.",
-
-    // Enhanced responses
-    quick_actions: "🎯 *Quick Actions:*",
-    bus_search_prompt: "🔍 *Search Buses*\n\nLet me find available buses for you...",
-    processing_request: "⏳ Processing your request...",
-    operation_complete: "✅ Operation completed successfully!",
-    something_wrong: "❌ Something went wrong. Please try again.",
-    invalid_command: "🤔 I didn't understand that. Type 'help' to see what I can do!",
+    // General
+    db_error: "❌ CRITICAL ERROR: The bot's database is not connected. Please contact support.",
+    unknown_command: "🤔 I don't understand that command. Type */help* for a list of available options.",
+    sync_setup_init: "📝 *Inventory Sync Setup:* Enter the Bus ID you wish to synchronize (e.g., `BUS101`).",
+    sync_setup_url: "🔗 Enter the **OSP API Endpoint** (the external URL for inventory data) for bus {busID}:",
+    sync_success: "✅ *Inventory Sync Setup Successful!* Bus {busID} is now configured to pull data from {url}.",
 };
 
 // Create the server
 const app = express();
+// The Razorpay webhook requires raw body parsing for signature verification
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // --- Database Initialization ---
 let db; 
 
 function getFirebaseDb() {
-    if (db) return db;
+    if (db) return db;
 
-    try {
-        const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
-        if (!rawCredsBase64) {
-            throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined");
-        }
-        
-        const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
-        const serviceAccount = JSON.parse(jsonString);
+    try {
+        const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
+        if (!rawCredsBase64) {
+            throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
+        }
+        
+        const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
+        const serviceAccount = JSON.parse(jsonString);
 
-        try {
-            admin.initializeApp({
-                credential: admin.credential.cert(serviceAccount)
-            });
-        } catch (error) {
-            if (!error.message.includes("default Firebase app already exists")) {
-                throw error;
-            }
-        }
-        
-        db = admin.firestore();
-        console.log("✅ Firebase DB initialized successfully.");
-        return db;
+        try {
+            admin.initializeApp({
+                credential: admin.credential.cert(serviceAccount)
+            });
+        } catch (error) {
+            if (!error.message.includes("default Firebase app already exists")) {
+                throw error;
+            }
+        }
+        
+        db = admin.firestore();
+        console.log("✅ Firebase DB initialized successfully.");
+        return db;
 
-    } catch (e) {
-        console.error("CRITICAL FIREBASE ERROR", e.message);
-        throw e; 
-    }
+    } catch (e) {
+        console.error("CRITICAL FIREBASE ERROR", e.message);
+        throw e; 
+    }
 }
 
-/* --------------------- Enhanced Telegram Helpers ---------------------- */
+/* --------------------- Telegram Axios Helpers ---------------------- */
 
 async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
-    if (!TELEGRAM_TOKEN) {
-        console.error("❌ TELEGRAM_TOKEN missing");
-        return; 
-    }
-    
-    // Truncate very long messages to avoid Telegram limits
-    if (text && text.length > 4096) {
-        text = text.substring(0, 4000) + "\n\n... (message truncated)";
-    }
-    
-    try {
-        const payload = { 
-            chat_id: chatId, 
-            text: text, 
-            parse_mode: parseMode 
-        };
-        if (replyMarkup) payload.reply_markup = replyMarkup;
-        
-        const response = await axios.post(`${TELEGRAM_API}/sendMessage`, payload, {
-            timeout: 10000
-        });
-        return response.data;
-    } catch (error) {
-        if (error.response) {
-            console.error(`❌ Telegram API Error: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-        } else if (error.request) {
-            console.error(`❌ Telegram Network Error: No response received`);
-        } else {
-            console.error(`❌ Telegram Error: ${error.message}`);
-        }
-    }
+    if (!TELEGRAM_TOKEN) {
+        console.error("❌ CRITICAL: TELEGRAM_TOKEN environment variable is missing. Cannot send message.");
+        return; 
+    }
+    try {
+        const payload = { chat_id: chatId, text: text, parse_mode: parseMode };
+        if (replyMarkup) payload.reply_markup = replyMarkup;
+        await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+    } catch (error) {
+        if (error.response) {
+            console.error(`❌ TELEGRAM API ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
+            if (error.response.data.description && error.response.data.description.includes('bot was blocked by the user')) {
+                console.error(`--- FATAL: User ${chatId} has blocked the bot. Cannot send messages. ---`);
+            }
+        } else if (error.request) {
+            console.error(`❌ TELEGRAM NETWORK ERROR for ${chatId}: No response received. Message: ${error.message}`);
+        } else {
+            console.error(`❌ TELEGRAM SETUP ERROR for ${chatId}: ${error.message}`);
+        }
+    }
 }
 
 async function sendChatAction(chatId, action) {
-    try {
-        await axios.post(`${TELEGRAM_API}/sendChatAction`, { 
-            chat_id: chatId, 
-            action: action 
-        }, { timeout: 5000 });
-    } catch (error) {
-        // Silent fail for action errors
-    }
+    try {
+        await axios.post(`${TELEGRAM_API}/sendChatAction`, { chat_id: chatId, action: action });
+    } catch (error) {
+        if (error.response) {
+            console.error(`❌ CRITICAL TELEGRAM ACTION ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
+        } else {
+            console.error(`❌ CRITICAL TELEGRAM ACTION NETWORK ERROR for ${chatId}: ${error.message}`);
+        }
+    }
 }
 
-async function answerCallbackQuery(callbackQueryId, text = null) {
-    try {
-        const payload = { callback_query_id: callbackQueryId };
-        if (text) payload.text = text;
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, payload, { timeout: 5000 });
-    } catch (error) {
-        // Suppress minor errors
-    }
+async function answerCallbackQuery(callbackQueryId) {
+    try {
+        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackQueryId });
+    } catch (error) {
+        // Suppress minor errors
+    }
 }
 
 async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
-    try {
-        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-            chat_id: chatId,
-            message_id: messageId,
-            reply_markup: replyMarkup
-        }, { timeout: 5000 });
-    } catch (error) {
-        // Suppress edit errors
-    }
+    try {
+        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: replyMarkup
+        });
+    } catch (error) {
+        // Suppress "message is not modified" errors
+    }
 }
 
-/* --------------------- Enhanced Helper Functions ---------------------- */
+/* --------------------- Shared Helper Functions ---------------------- */
 
 async function getAppState(chatId) {
-    try {
-        const db = getFirebaseDb();
-        const doc = await db.collection('user_state').doc(String(chatId)).get();
-        if (doc.exists) return { state: doc.data().state, data: doc.data().data };
-        return { state: 'IDLE', data: {} };
-    } catch (error) {
-        console.error('Error getting app state:', error.message);
-        return { state: 'IDLE', data: {} };
-    }
+    const db = getFirebaseDb();
+    const doc = await db.collection('user_state').doc(String(chatId)).get();
+    if (doc.exists) return { state: doc.data().state, data: doc.data().data };
+    return { state: 'IDLE', data: {} };
 }
 
 async function saveAppState(chatId, stateName, data) {
-    try {
-        const db = getFirebaseDb();
-        await db.collection('user_state').doc(String(chatId)).set({
-            state: stateName,
-            data: data,
-            updated_at: admin.firestore.FieldValue.serverTimestamp()
-        });
-    } catch (error) {
-        console.error('Error saving app state:', error.message);
-    }
+    const db = getFirebaseDb();
+    await db.collection('user_state').doc(String(chatId)).set({
+        state: stateName,
+        data: data,
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    });
 }
 
-async function clearAppState(chatId) {
-    try {
-        const db = getFirebaseDb();
-        await db.collection('user_state').doc(String(chatId)).delete();
-    } catch (error) {
-        console.error('Error clearing app state:', error.message);
-    }
+async function unlockSeats(booking) {
+    try {
+        const db = getFirebaseDb();
+        const batch = db.batch();
+        booking.seats.forEach(seat => {
+            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
+            batch.update(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+        });
+        await batch.commit();
+    } catch (e) {
+        console.error("CRITICAL: Failed to unlock seats:", e.message);
+    }
 }
+
+async function getBusInfo(busID) {
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('buses').where('bus_id', '==', busID).limit(1).get();
+        if (snapshot.empty) return null;
+        
+        const data = snapshot.docs[0].data();
+        return {
+            busID: data.bus_id,
+            from: data.from,
+            to: data.to,
+            date: data.departure_time.split(' ')[0],
+            time: data.departure_time.split(' ')[1]
+        };
+    } catch (e) {
+        console.error("Error fetching bus info:", e.message);
+        return null;
+    }
+}
+
+async function sendManagerNotification(busID, type, details) {
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        
+        if (!busDoc.exists || !busDoc.data().tracking_manager_id) return; 
+
+        const managerChatId = busDoc.data().tracking_manager_id;
+        const now = details.dateTime;
+
+        let notificationText = '';
+        if (type === 'BOOKING') {
+            const seatList = details.seats.map(s => s.seatNo).join(', ');
+            notificationText = MESSAGES.manager_notification_booking
+                .replace('{busID}', busID)
+                .replace('{seats}', seatList)
+                .replace('{passengerName}', details.passengerName)
+                .replace('{dateTime}', now);
+        } else if (type === 'CANCELLATION') {
+            const seatsList = details.seats.join(', ');
+            notificationText = MESSAGES.manager_notification_cancellation
+                .replace('{bookingId}', details.bookingId)
+                .replace('{busID}', busID)
+                .replace('{seats}', seatsList)
+                .replace('{dateTime}', now);
+        }
+
+        if (notificationText) {
+            await sendMessage(managerChatId, notificationText, "Markdown");
+        }
+    } catch (e) {
+        console.error("Error sending manager notification:", e.message);
+    }
+}
+
+/* --------------------- Live Tracking Cron Logic ---------------------- */
+
+// This function is executed by the external Vercel Cron Job
+async function sendLiveLocationUpdates() {
+    const db = getFirebaseDb();
+    const updates = [];
+    let updatesSent = 0;
+
+    try {
+        // Find all buses that have a manager assigned (meaning tracking is enabled)
+        const busesSnapshot = await db.collection('buses').where('tracking_manager_id', '!=', null).get();
+
+        const currentTime = new Date();
+        const notificationTime = currentTime.toLocaleTimeString('en-IN');
+        const mockLocation = ["New Delhi Station", "Mumbai Central", "Pune Junction", "Jaipur Highway", "Bus is en route"];
+        
+        // Loop through all active tracking buses
+        busesSnapshot.forEach(busDoc => {
+            const data = busDoc.data();
+            const busID = data.bus_id;
+            const managerId = data.tracking_manager_id;
+            
+            // Generate a random mock location
+            const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
+
+            // Update the bus document with a new, mock location and time
+            busDoc.ref.update({
+                last_location_time: admin.firestore.FieldValue.serverTimestamp(),
+                last_location_name: randomLocation
+            });
+
+            // 1. Notify the Manager (as proof the cron job ran)
+            const managerNotification = MESSAGES.tracking_passenger_info
+                .replace('{busID}', busID)
+                .replace('{location}', randomLocation)
+                .replace('{time}', notificationTime);
+            
+            updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "Markdown"));
+            updatesSent++;
+
+            // 2. NOTE: In a production system, you would query the 'bookings' collection here
+            // to find and notify every passenger of this bus.
+        });
+
+        await Promise.all(updates);
+        return { updatesSent };
+
+    } catch (error) {
+        console.error("CRON JOB FAILED during update loop:", error.message);
+        throw error;
+    }
+}
+
+/* --------------------- Razorpay Webhook Verification ---------------------- */
+
+/**
+ * Helper function to verify Razorpay signature using HMAC-SHA256.
+ */
+function verifyRazorpaySignature(payload, signature) {
+    if (!RAZORPAY_WEBHOOK_SECRET) {
+        console.warn("RAZORPAY_WEBHOOK_SECRET is not set. Skipping signature verification.");
+        return true;
+    }
+    const expectedSignature = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
+        .update(payload)
+        .digest('hex');
+    
+    return expectedSignature === signature;
+}
+
+/* --------------------- Core Handlers ---------------------- */
 
 async function getUserRole(chatId) {
-    try {
-        const db = getFirebaseDb();
-        const doc = await db.collection('users').doc(String(chatId)).get();
-        if (doc.exists) return doc.data().role;
-        return 'unregistered';
-    } catch (e) {
-        return 'error';
-    }
-}
-
-/* --------------------- Enhanced Message Handlers ---------------------- */
-
-async function sendWelcomeMessage(chatId, user) {
-    const welcomeKeyboard = {
-        inline_keyboard: [
-            [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
-            [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
-            [{ text: "👤 My Profile", callback_data: "cb_my_profile" }],
-            [{ text: "🆘 Help", callback_data: "cb_help" }]
-        ]
-    };
-    
-    await sendMessage(chatId, MESSAGES.welcome, "Markdown", welcomeKeyboard);
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('users').doc(String(chatId)).get();
+        if (doc.exists) return doc.data().role;
+        return 'unregistered';
+    } catch (e) {
+        return 'error';
+    }
 }
 
 async function sendHelpMessage(chatId) {
-    const helpKeyboard = {
-        inline_keyboard: [
-            [{ text: "🚌 Quick Book", callback_data: "cb_book_bus" }],
-            [{ text: "📞 Contact Support", callback_data: "cb_support" }],
-            [{ text: "🏠 Main Menu", callback_data: "cb_main_menu" }]
-        ]
-    };
-    
-    await sendMessage(chatId, MESSAGES.help, "Markdown", helpKeyboard);
+    const db = getFirebaseDb();
+    const userDoc = await db.collection('users').doc(String(chatId)).get();
+    const userRole = userDoc.exists ? userDoc.data().role : 'unregistered';
+    
+    let baseButtons = [];
+
+    if (userRole === 'manager' || userRole === 'owner') {
+        baseButtons = [
+            [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+            [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
+            [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
+        ];
+    } else {
+        baseButtons = [
+            [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
+            [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
+        ];
+    }
+    
+    let finalButtons = baseButtons;
+    
+    if (userDoc.exists) {
+        finalButtons.push([{ text: "📞 Update Phone", callback_data: "cb_update_phone" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }]);
+    } else {
+        finalButtons.push([{ text: "👤 My Profile", callback_data: "cb_my_profile" }]);
+    }
+    
+    finalButtons.push([{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]);
+
+    const keyboard = { inline_keyboard: finalButtons };
+
+    await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
 }
 
-async function sendQuickActions(chatId) {
-    const quickActionsKeyboard = {
-        inline_keyboard: [
-            [{ text: "🚍 Search Buses", callback_data: "cb_book_bus" }],
-            [{ text: "📋 My Bookings", callback_data: "cb_my_booking" }],
-            [{ text: "👤 Profile", callback_data: "cb_my_profile" }, { text: "🆘 Help", callback_data: "cb_help" }]
-        ]
-    };
-    
-    await sendMessage(chatId, MESSAGES.quick_actions, "Markdown", quickActionsKeyboard);
-}
+/* --------------------- General Handlers ---------------------- */
 
-/* --------------------- Enhanced Core Handlers ---------------------- */
-
-async function handleStartCommand(chatId, user) {
-    try {
-        const db = getFirebaseDb();
-        const userDoc = await db.collection('users').doc(String(chatId)).get();
-
-        if (userDoc.exists) {
-            const userName = user.first_name || 'Traveler';
-            await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
-            await sendQuickActions(chatId);
-        } else {
-            const registrationKeyboard = {
-                inline_keyboard: [
-                    [{ text: "👤 Passenger", callback_data: "cb_register_role_user" }],
-                    [{ text: "👨‍💼 Bus Manager", callback_data: "cb_register_role_manager" }],
-                    [{ text: "ℹ️ Learn More", callback_data: "cb_learn_more" }]
-                ]
-            };
-            await sendMessage(chatId, MESSAGES.prompt_role, "Markdown", registrationKeyboard);
-        }
-    } catch (error) {
-        console.error('Start command error:', error.message);
-        await sendMessage(chatId, "🚧 We're experiencing technical issues. Please try again in a moment.");
-    }
-}
-
-async function handleHelpCommand(chatId) {
-    await sendHelpMessage(chatId);
-}
-
-async function handleBusSearch(chatId) {
-    await sendChatAction(chatId, "typing");
-    await sendMessage(chatId, MESSAGES.bus_search_prompt, "Markdown");
-    
-    try {
-        const db = getFirebaseDb();
-        const snapshot = await db.collection('buses').limit(10).get();
-        const buses = [];
-        
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            buses.push({
-                busID: data.bus_id,
-                from: data.from,
-                to: data.to,
-                date: data.departure_time?.split(' ')[0] || 'N/A',
-                time: data.departure_time?.split(' ')[1] || 'N/A',
-                owner: data.owner,
-                price: data.price,
-                busType: data.bus_type,
-                rating: data.rating || 4.2,
-                availableSeats: data.total_seats || 40
-            });
-        });
-
-        if (buses.length === 0) {
-            return await sendMessage(chatId, MESSAGES.no_buses, "Markdown");
-        }
-
-        let response = `🚌 *Found ${buses.length} Available Buses*\n\n`;
-        
-        buses.forEach((bus, index) => {
-            response += `*${index + 1}. ${bus.busID}* - ${bus.owner}\n`;
-            response += `📍 ${bus.from} → ${bus.to}\n`;
-            response += `📅 ${bus.date} 🕒 ${bus.time}\n`;
-            response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
-            response += `💺 ${bus.availableSeats} seats available\n`;
-            response += `🔍 *Type:* \`Show seats ${bus.busID}\`\n\n`;
-        });
-        
-        response += `💡 *Quick Tip:* Use "Show seats BUS_ID" to view available seats and book.`;
-        
-        await sendMessage(chatId, response, "Markdown");
-        
-    } catch (error) {
-        console.error('Bus search error:', error.message);
-        await sendMessage(chatId, "❌ Unable to search buses right now. Please try again.");
-    }
-}
-
-async function handleSeatMap(chatId, text) {
-    const busMatch = text.match(/(BUS\d+)/i);
-    const busID = busMatch ? busMatch[1].toUpperCase() : null;
-    
-    if (!busID) {
-        return await sendMessage(chatId, MESSAGES.specify_bus_id, "Markdown");
-    }
-
-    await sendChatAction(chatId, "typing");
-    
-    try {
-        const db = getFirebaseDb();
-        const busDoc = await db.collection('buses').doc(busID).get();
-        
-        if (!busDoc.exists) {
-            return await sendMessage(chatId, MESSAGES.seat_map_error.replace('{busID}', busID), "Markdown");
-        }
-
-        const busData = busDoc.data();
-        const seatsSnapshot = await db.collection('seats').where('bus_id', '==', busID).get();
-        
-        if (seatsSnapshot.empty) {
-            return await sendMessage(chatId, MESSAGES.no_seats_found.replace('{busID}', busID), "Markdown");
-        }
-
-        const seatStatus = {};
-        let availableCount = 0;
-        
-        seatsSnapshot.forEach(doc => {
-            const data = doc.data();
-            seatStatus[data.seat_no] = data;
-            if (data.status === 'available') availableCount++;
-        });
-
-        // Create enhanced seat map
-        let seatMap = `🚍 *${busID} - Seat Map*\n`;
-        seatMap += `🏢 ${busData.owner}\n`;
-        seatMap += `📍 ${busData.from} → ${busData.to}\n`;
-        seatMap += `📅 ${busData.departure_time?.split(' ')[0] || 'N/A'} 🕒 ${busData.departure_time?.split(' ')[1] || 'N/A'}\n\n`;
-        
-        seatMap += `*Legend:*\n`;
-        seatMap += `🟩 Available • 🔒 Your Selection • ⚫ Booked\n\n`;
-        
-        seatMap += `🚌 *Driver*\n`;
-        seatMap += `┌─────────┬─────────┐\n`;
-
-        for (let row = 1; row <= 10; row++) {
-            let line = '│ ';
-            for (let col of ['A', 'B', 'C', 'D']) {
-                const seatNo = `${row}${col}`;
-                const data = seatStatus[seatNo] || {};
-                const status = data.status || 'unknown';
-                
-                let emoji = '⬜';
-                if (status === 'available') emoji = `🟩${seatNo}`;
-                else if (status === 'booked') emoji = `⚫${seatNo}`;
-                else if (status === 'locked') emoji = `🔒${seatNo}`;
-                
-                line += `${emoji} `;
-                if (col === 'B') line += '│ ';
-            }
-            seatMap += line + '│\n';
-            
-            if (row === 5) {
-                seatMap += '├─────────┼─────────┤\n';
-            }
-        }
-        
-        seatMap += `└─────────┴─────────┘\n\n`;
-        seatMap += `📊 *${availableCount}* seats available out of ${seatsSnapshot.size}\n\n`;
-        seatMap += `💡 *Book a seat:*\n`;
-        seatMap += `\`Book seat ${busID} 1A\`\n\n`;
-        seatMap += `Need help choosing? Just ask!`;
-
-        await sendMessage(chatId, seatMap, "Markdown");
-        
-    } catch (error) {
-        console.error('Seat map error:', error.message);
-        await sendMessage(chatId, MESSAGES.seat_map_error.replace('{busID}', busID), "Markdown");
-    }
-}
-
-async function handleUserProfile(chatId) {
-    try {
-        const db = getFirebaseDb();
-        const doc = await db.collection('users').doc(String(chatId)).get();
-
-        if (!doc.exists) {
-            return await sendMessage(chatId, MESSAGES.user_not_found);
-        }
-
-        const user = doc.data();
-        const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
-        
-        const profileText = `👤 *Your Profile*\n\n` +
-                           `*Name:* ${user.name || 'Not set'}\n` +
-                           `*Phone:* ${user.phone || 'Not set'}\n` +
-                           `*Aadhar:* ${user.aadhar || 'Not set'}\n` +
-                           `*Role:* ${user.role || 'user'}\n` +
-                           `*Status:* ${user.status || 'Active'}\n` +
-                           `*Member since:* ${joinDate}\n\n` +
-                           `💡 *To update:* Send "my profile details [Name] / [Aadhar] / [Phone]"`;
-
-        const profileKeyboard = {
-            inline_keyboard: [
-                [{ text: "📞 Update Phone", callback_data: "cb_update_phone" }],
-                [{ text: "🚌 Book Bus", callback_data: "cb_book_bus" }]
-            ]
-        };
-
-        await sendMessage(chatId, profileText, "Markdown", profileKeyboard);
-        
-    } catch (error) {
-        console.error('Profile error:', error.message);
-        await sendMessage(chatId, "❌ Unable to load profile. Please try again.");
-    }
-}
-
-/* --------------------- Enhanced Main Router ---------------------- */
-
-async function handleUserMessage(chatId, text, user) {
-    const textLower = text.toLowerCase().trim();
-
-    // Always show typing action for better UX
-    await sendChatAction(chatId, "typing");
-
-    // Check for state first
-    const state = await getAppState(chatId);
-    if (state.state !== 'IDLE') {
-        await handleStatefulInput(chatId, text, state);
-        return;
-    }
-
-    // Handle commands
-    switch (true) {
-        case textLower === '/start':
-            await handleStartCommand(chatId, user);
-            break;
-            
-        case textLower.includes('help') || textLower === '/help':
-            await handleHelpCommand(chatId);
-            break;
-            
-        case textLower.includes('book bus') || textLower === '/book':
-            await handleBusSearch(chatId);
-            break;
-            
-        case textLower.startsWith('show seats'):
-            await handleSeatMap(chatId, text);
-            break;
-            
-        case textLower.startsWith('my profile') || textLower === '/profile':
-            await handleUserProfile(chatId);
-            break;
-            
-        case textLower.startsWith('my profile details'):
-            await handleProfileUpdate(chatId, text);
-            break;
-            
-        case textLower.startsWith('book seat'):
-            await handleSeatSelection(chatId, text);
-            break;
-            
-        case textLower.startsWith('cancel booking'):
-            await handleCancellation(chatId, text);
-            break;
-            
-        case textLower.includes('hello') || textLower.includes('hi '):
-            await sendMessage(chatId, `👋 Hello ${user.first_name || 'there'}! Ready to book your next journey?`);
-            await sendQuickActions(chatId);
-            break;
-            
-        case textLower.includes('thank'):
-            await sendMessage(chatId, "You're welcome! 😊 Happy to help with your travel plans.");
-            break;
-            
-        case textLower.includes('bus') && textLower.includes('time'):
-            await sendMessage(chatId, "🕒 Bus timings vary by route. Use 'Book bus' to see available buses with their schedules.");
-            break;
-            
-        case textLower.includes('price') || textLower.includes('cost'):
-            await sendMessage(chatId, "💰 Prices start from ₹200 and vary by route, bus type, and timing. Check 'Book bus' for current fares.");
-            break;
-            
-        default:
-            await sendMessage(chatId, MESSAGES.invalid_command);
-            await sendQuickActions(chatId);
-    }
-}
-
-async function handleStatefulInput(chatId, text, state) {
-    // Handle various states here (simplified for example)
-    if (state.state === 'AWAITING_PASSENGER_DETAILS') {
-        await handlePassengerDetails(chatId, text, state);
-    } else if (state.state === 'AWAITING_NEW_PHONE') {
-        await handlePhoneUpdateInput(chatId, text);
-    } else {
-        // Clear stuck state
-        await clearAppState(chatId);
-        await sendMessage(chatId, "🔄 Session reset. How can I help you today?");
-        await sendQuickActions(chatId);
-    }
-}
-
-// Simplified version of other handlers for brevity
-async function handleProfileUpdate(chatId, text) {
-    try {
-        const match = text.match(/my profile details\s+([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
-        
-        if (!match) {
-            await sendMessage(chatId, MESSAGES.profile_update_error, "Markdown");
-            return;
-        }
-
-        const name = match[1].trim();
-        const aadhar = match[2].trim();
-        const phone = match[3].trim();
-
-        const db = getFirebaseDb();
-        await db.collection('users').doc(String(chatId)).update({
-            name: name,
-            aadhar: aadhar,
-            phone: phone,
-            status: 'active'
-        });
-
-        await sendMessage(chatId, MESSAGES.profile_updated, "Markdown");
-        await handleUserProfile(chatId);
-
-    } catch (error) {
-        console.error('Profile update error:', error.message);
-        await sendMessage(chatId, "❌ Couldn't update profile. Please check your details and try again.");
-    }
-}
-
-async function handleSeatSelection(chatId, text) {
-    try {
-        const match = text.match(/book seat\s+(BUS\d+)\s+([A-Z0-9]+)/i);
-        if (!match) {
-            return await sendMessage(chatId, "❌ Please specify Bus ID and Seat.\n*Example:* `Book seat BUS101 3A`", "Markdown");
-        }
-
-        const busID = match[1].toUpperCase();
-        const seatNo = match[2].toUpperCase();
-
-        // Show gender selection
-        const genderKeyboard = {
-            inline_keyboard: [
-                [{ text: "🚹 Male", callback_data: `cb_gender_${busID}_${seatNo}_M` }],
-                [{ text: "🚺 Female", callback_data: `cb_gender_${busID}_${seatNo}_F` }],
-                [{ text: "❌ Cancel", callback_data: "cb_cancel_booking" }]
-            ]
-        };
-
-        await sendMessage(chatId, MESSAGES.gender_prompt.replace('{seatNo}', seatNo), "Markdown", genderKeyboard);
-
-    } catch (error) {
-        console.error('Seat selection error:', error.message);
-        await sendMessage(chatId, "❌ Unable to process seat selection. Please try again.");
-    }
-}
-
-async function handleCancellation(chatId, text) {
-    const match = text.match(/cancel booking\s+(BOOK\d+)/i);
-    if (!match) {
-        return await sendMessage(chatId, "❌ Please specify Booking ID.\n*Example:* `Cancel booking BOOK123`", "Markdown");
-    }
-
-    const bookingId = match[1].toUpperCase();
-    await sendMessage(chatId, `🔄 Cancelling booking ${bookingId}...`);
-
-    // Implementation would go here
-    await sendMessage(chatId, MESSAGES.booking_cancelled.replace('{bookingId}', bookingId).replace('{dateTime}', new Date().toLocaleString('en-IN')), "Markdown");
-}
-
-/* --------------------- Enhanced Callback Handler ---------------------- */
-
-async function handleCallbackQuery(chatId, callbackData, messageId, user) {
-    await answerCallbackQuery(callbackData.id, "Processing...");
-    await editMessageReplyMarkup(chatId, messageId, null);
-
-    await sendChatAction(chatId, "typing");
-
-    try {
-        if (callbackData.data === 'cb_book_bus') {
-            await handleBusSearch(chatId);
-        } else if (callbackData.data === 'cb_my_booking') {
-            await handleBookingInfo(chatId);
-        } else if (callbackData.data === 'cb_my_profile') {
-            await handleUserProfile(chatId);
-        } else if (callbackData.data === 'cb_help') {
-            await handleHelpCommand(chatId);
-        } else if (callbackData.data === 'cb_main_menu') {
-            await sendQuickActions(chatId);
-        } else if (callbackData.data.startsWith('cb_register_role_')) {
-            await handleRoleSelection(chatId, user, callbackData.data);
-        } else if (callbackData.data === 'cb_update_phone') {
-            await handleUpdatePhoneNumber(chatId);
-        } else if (callbackData.data.startsWith('cb_gender_')) {
-            await handleGenderSelection(chatId, callbackData.data);
-        } else if (callbackData.data === 'cb_cancel_booking') {
-            await clearAppState(chatId);
-            await sendMessage(chatId, "✅ Booking cancelled. What would you like to do next?");
-            await sendQuickActions(chatId);
-        } else if (callbackData.data === 'cb_support') {
-            await sendMessage(chatId, "📞 *Support Contact*\n\nFor immediate assistance:\n• Call: 1800-123-4567\n• Email: support@goroute.com\n• Hours: 24/7\n\nWe're here to help! 🛠️", "Markdown");
-        } else if (callbackData.data === 'cb_learn_more') {
-            await sendMessage(chatId, "ℹ️ *About GoRoute*\n\nWe make bus travel simple, safe, and convenient. Book seats, track buses, and manage your trips - all in one place!\n\nReady to get started? Choose 'Passenger' to begin.", "Markdown");
-        } else {
-            await sendMessage(chatId, "🔄 Action processed. How can I help you next?");
-            await sendQuickActions(chatId);
-        }
-    } catch (error) {
-        console.error('Callback handler error:', error.message);
-        await sendMessage(chatId, "❌ Something went wrong. Please try again.");
-    }
-}
-
-// Simplified versions of other handlers
-async function handleRoleSelection(chatId, user, callbackData) {
-    const role = callbackData.split('_').pop();
-    const db = getFirebaseDb();
-    
-    await db.collection('users').doc(String(chatId)).set({
-        user_id: 'USER' + Date.now(),
-        name: user.first_name + (user.last_name ? ' ' + user.last_name : ''),
-        chat_id: String(chatId),
-        phone: '',
-        aadhar: '',
-        status: 'pending_details',
-        role: role,
-        join_date: admin.firestore.FieldValue.serverTimestamp()
-    });
-
-    await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "Markdown");
-}
-
-async function handleUpdatePhoneNumber(chatId) {
-    await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
-    await sendMessage(chatId, MESSAGES.update_phone_prompt, "Markdown");
+async function handleUpdatePhoneNumberCallback(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole === 'unregistered' || userRole === 'error') {
+        return await sendMessage(chatId, "❌ You must register first to update your profile. Send /start.");
+    }
+    
+    await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
+    await sendMessage(chatId, MESSAGES.update_phone_prompt, "Markdown");
 }
 
 async function handlePhoneUpdateInput(chatId, text) {
-    const phoneRegex = /^\d{10}$/;
-    const phoneNumber = text.replace(/[^0-9]/g, '');
+    const phoneRegex = /^\d{10}$/;
+    const phoneNumber = text.replace(/[^0-9]/g, '');
 
-    if (!phoneNumber.match(phoneRegex)) {
-        return await sendMessage(chatId, MESSAGES.phone_invalid, "Markdown");
-    }
-
-    const db = getFirebaseDb();
-    await db.collection('users').doc(String(chatId)).update({ phone: phoneNumber });
-    
-    await clearAppState(chatId);
-    await sendMessage(chatId, MESSAGES.phone_updated_success, "Markdown");
+    if (!phoneNumber.match(phoneRegex)) {
+        return await sendMessage(chatId, MESSAGES.phone_invalid, "Markdown");
+    }
+    
+    try {
+        const db = getFirebaseDb();
+        await db.collection('users').doc(String(chatId)).update({ phone: phoneNumber });
+        
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.phone_updated_success, "Markdown");
+        await handleUserProfile(chatId);
+        
+    } catch (error) {
+        console.error('❌ Phone Update Error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error + " Could not save phone number.");
+    }
 }
 
-async function handleGenderSelection(chatId, callbackData) {
-    const parts = callbackData.split('_');
-    const busID = parts[2];
-    const seatNo = parts[3];
-    const gender = parts[4];
+async function showAvailableBuses(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('buses').get();
+        const buses = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            buses.push({
+                busID: data.bus_id, from: data.from, to: data.to,
+                date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
+                owner: data.owner, price: data.price, busType: data.bus_type,
+                rating: data.rating || 4.2, availableSeats: data.total_seats || 40 
+            });
+        });
 
-    await sendMessage(chatId, `✅ ${gender === 'M' ? '🚹 Male' : '🚺 Female'} selected for seat ${seatNo}\n\nNow please provide passenger details:\n\n\`[Full Name] / [Age] / [Aadhar Number]\`\n\n*Example:*\n\`Raj Kumar / 25 / 123456789012\``, "Markdown");
+        if (buses.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "Markdown");
 
-    await saveAppState(chatId, 'AWAITING_PASSENGER_DETAILS', {
-        busID: busID,
-        seatNo: seatNo,
-        gender: gender
-    });
+        let response = `🚌 *Available Buses* 🚌\n\n`;
+        buses.forEach((bus, index) => {
+            response += `*${index + 1}. ${bus.busID}* - ${bus.owner}\n`;
+            response += `📍 ${bus.from} → ${bus.to}\n`;
+            response += `📅 ${bus.date} 🕒 ${bus.time}\n`;
+            response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
+            response += `💺 ${bus.availableSeats} seats available\n`;
+            response += `📋 *"Show seats ${bus.busID}"* to view seats\n\n`;
+        });
+        await sendMessage(chatId, response, "Markdown");
+        
+    } catch (error) {
+        console.error('❌ Bus search error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
 }
 
-async function handlePassengerDetails(chatId, text, state) {
-    const match = text.match(/([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
-    if (!match) {
-        return await sendMessage(chatId, MESSAGES.booking_details_error, "Markdown");
-    }
+async function handleBusSearch(chatId) {
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "🧍 Single Passenger", callback_data: "cb_booking_single" }],
+            [{ text: "🧑‍🤝‍🧑 Couple / Husband-Wife (WIP)", callback_data: "cb_booking_couple" }],
+            [{ text: "👪 Family / Group (WIP)", callback_data: "cb_booking_family" }],
+        ]
+    };
+    await sendMessage(chatId, MESSAGES.booking_type_prompt, "Markdown", keyboard);
+}
 
-    const name = match[1].trim();
-    const age = match[2].trim();
-    const aadhar = match[3].trim();
+async function handleCancellation(chatId, text) {
+    const match = text.match(/cancel booking\s+(BOOK\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: `Cancel booking BOOK123`", "Markdown");
 
-    await sendMessage(chatId, `✅ Details saved!\n\n*Passenger:* ${name}\n*Age:* ${age}\n*Seat:* ${state.data.seatNo}\n\nProcessing payment...`);
+    const bookingId = match[1].toUpperCase();
+    
+    try {
+        const db = getFirebaseDb();
+        const bookingRef = db.collection('bookings').doc(bookingId);
+        const bookingDoc = await bookingRef.get();
 
-    // Simulate payment process
-    setTimeout(async () => {
-        const bookingId = 'BOOK' + Date.now();
-        await sendMessage(chatId, MESSAGES.booking_finish
-            .replace('{bookingId}', bookingId)
-            .replace('{busID}', state.data.busID)
-            .replace('{seats}', state.data.seatNo)
-            .replace('{count}', '1')
-            .replace('{amount}', '450')
-            .replace('{date}', new Date().toLocaleDateString('en-IN'))
-            .replace('{time}', '14:30'), "Markdown");
-        
-        await clearAppState(chatId);
-        await sendQuickActions(chatId);
-    }, 2000);
+        if (!bookingDoc.exists || bookingDoc.data().chat_id !== String(chatId)) {
+            return await sendMessage(chatId, `❌ Booking ${bookingId} not found or you don't have permission to cancel it.`);
+        }
+        
+        const refundTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+        const batch = db.batch();
+        const bookingData = bookingDoc.data();
+
+        batch.update(bookingRef, { status: 'cancelled', cancelled_at: admin.firestore.FieldValue.serverTimestamp() });
+
+        bookingData.seats.forEach(seatNo => {
+            const seatRef = db.collection('seats').doc(`${bookingData.bus_id}-${seatNo}`);
+            batch.update(seatRef, { status: 'available', booking_id: admin.firestore.FieldValue.delete(), temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+        });
+
+        await batch.commit();
+        
+        await sendMessage(chatId, MESSAGES.booking_cancelled.replace('{bookingId}', bookingId).replace('{dateTime}', refundTime), "Markdown");
+        
+        await sendManagerNotification(bookingData.bus_id, 'CANCELLATION', { 
+            bookingId: bookingId,
+            seats: bookingData.seats,
+            dateTime: refundTime
+        });
+
+    } catch (e) {
+        console.error('❌ Cancellation error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function startUserRegistration(chatId, user) {
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('users').doc(String(chatId)).get();
+
+        if (doc.exists) {
+           const userName = user.first_name || 'User'; 
+           await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
+           await sendHelpMessage(chatId); 
+        } else {
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: "👤 User (Book Tickets)", callback_data: "cb_register_role_user" }],
+                    [{ text: "👨‍💼 Bus Manager (Manage Buses)", callback_data: "cb_register_role_manager" }],
+                    [{ text: "👑 Bus Owner (Manage Staff)", callback_data: "cb_register_role_owner" }],
+                ]
+            };
+            await sendMessage(chatId, MESSAGES.prompt_role, "Markdown", keyboard);
+        }
+    } catch (error) {
+        console.error(`❌ /start error for ${chatId}:`, error.message);
+        // If Firebase/DB error, inform the user
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleRoleSelection(chatId, user, callbackData) {
+    try {
+        const role = callbackData.split('_').pop();
+        const db = getFirebaseDb();
+        const newUser = {
+            user_id: 'USER' + Date.now(),
+            name: user.first_name + (user.last_name ? ' ' + user.last_name : ''),
+            chat_id: String(chatId),
+            phone: '', aadhar: '',
+            status: 'pending_details',
+            role: role, lang: 'en',
+            join_date: admin.firestore.FieldValue.serverTimestamp()
+        };
+        await db.collection('users').doc(String(chatId)).set(newUser);
+        await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "Markdown");
+    } catch (error) {
+        console.error('❌ handleRoleSelection error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleProfileUpdate(chatId, text) {
+    try {
+        const match = text.match(/my profile details\s+([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
+        
+        if (!match) {
+            await sendMessage(chatId, MESSAGES.profile_update_error, "Markdown");
+            return;
+        }
+        const name = match[1].trim();
+        const aadhar = match[2].trim();
+        const phone = match[3].trim();
+
+        const db = getFirebaseDb();
+        const userRef = db.collection('users').doc(String(chatId));
+        const doc = await userRef.get();
+
+        if (!doc.exists) {
+            await sendMessage(chatId, MESSAGES.user_not_found);
+            return;
+        }
+        
+        await userRef.update({ name: name, aadhar: aadhar, phone: phone, status: 'active' });
+        await sendMessage(chatId, MESSAGES.profile_updated, "Markdown");
+        await handleUserProfile(chatId);
+
+    } catch (error) {
+        console.error('❌ handleProfileUpdate error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleUserProfile(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('users').doc(String(chatId)).get();
+
+        if (doc.exists) {
+            const user = doc.data();
+            const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
+            
+            const profileText = `👤 *Your Profile*\n\n` +
+                                 `*Name:* ${user.name || 'Not set'}\n` +
+                                 `*Chat ID:* ${user.chat_id}\n` +
+                                 `*Phone:* ${user.phone || 'Not set'}\n` +
+                                 `*Aadhar:* ${user.aadhar || 'Not set'}\n` +
+                                 `*Role:* ${user.role || 'user'}\n` +
+                                 `*Status:* ${user.status || 'N/A'}\n` +
+                                 `*Member since:* ${joinDate}`;
+            
+            await sendMessage(chatId, profileText, "Markdown");
+        } else {
+            await sendMessage(chatId, MESSAGES.user_not_found);
+        }
+
+    } catch (error) {
+        console.error('❌ Error in handleUserProfile:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
 }
 
 async function handleBookingInfo(chatId) {
-    // Mock implementation
-    await sendMessage(chatId, `📋 *Your Bookings*\n\n*No active bookings found.*\n\nStart your journey by searching for buses! 🚌`, "Markdown");
-    await sendQuickActions(chatId);
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('bookings').where('chat_id', '==', String(chatId)).get();
+        
+        if (snapshot.empty) return await sendMessage(chatId, MESSAGES.no_bookings);
+
+        let response = "🎫 *Your Active Bookings*\n\n";
+        snapshot.forEach(doc => {
+            const b = doc.data();
+            const seatsList = b.seats.join(', ');
+            response += `📋 *ID: ${b.booking_id}*\n`;
+            response += `🚌 Bus: ${b.bus_id}\n`;
+            response += `💺 Seats: ${seatsList}\n`;
+            response += `👥 Passengers: ${b.passengers.length}\n`;
+            response += `Status: ${b.status}\n\n`;
+        });
+        response += `💡 To cancel, type "Cancel booking BOOKING_ID"`;
+        await sendMessage(chatId, response, "Markdown");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+/* --------------------- Seat/Booking Logic ---------------------- */
+
+async function checkSeatSafety(busID, seatNo, requestedGender) {
+    if (requestedGender === 'F') return true;
+
+    const db = getFirebaseDb();
+    
+    const column = seatNo.slice(-1);
+    const row = seatNo.slice(0, -1);
+    let adjacentSeatNo = null;
+
+    if (column === 'A') adjacentSeatNo = row + 'B';
+    else if (column === 'B') adjacentSeatNo = row + 'A';
+    else if (column === 'C') adjacentSeatNo = row + 'D';
+    else if (column === 'D') adjacentSeatNo = row + 'C';
+    
+    if (!adjacentSeatNo) return true;
+
+    const adjacentDoc = await db.collection('seats').doc(`${busID}-${adjacentSeatNo}`).get();
+    
+    if (adjacentDoc.exists) {
+        const data = adjacentDoc.data();
+        if (data.status !== 'available' && data.gender === 'F') {
+            return false;
+        }
+    }
+    
+    return true;
+}
+
+async function handleSeatMap(chatId, text) {
+    try {
+        const busMatch = text.match(/(BUS\d+)/i);
+        const busID = busMatch ? busMatch[1].toUpperCase() : null;
+        
+        if (!busID) return await sendMessage(chatId, MESSAGES.specify_bus_id, "Markdown");
+
+        const busInfo = await getBusInfo(busID);
+        if (!busInfo) return await sendMessage(chatId, MESSAGES.seat_map_error.replace('{busID}', busID), "Markdown");
+
+        const db = getFirebaseDb();
+        const seatsSnapshot = await db.collection('seats').where('bus_id', '==', busID).get();
+        const seatStatus = {};
+        let availableCount = 0;
+        
+        seatsSnapshot.forEach(doc => {
+            const data = doc.data();
+            seatStatus[data.seat_no] = data;
+            if (data.status === 'available') availableCount++;
+        });
+
+        let seatMap = `🚍 *Seat Map - ${busID}*\n`;
+        seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
+        seatMap += `📅 ${busInfo.date} 🕒 ${busInfo.time}\n\n`;
+        seatMap += `Legend: 🟩 Available • ⚫M Booked Male • ⚫F Booked Female\n\n`;
+
+        for (let row = 1; row <= 10; row++) {
+            let line = '';
+            for (let col of ['A', 'B', 'C', 'D']) {
+                const seatNo = `${row}${col}`;
+                const data = seatStatus[seatNo] || {}; 
+                const status = data.status || '⬜́'; 
+                
+                let display = '⬜́';
+                if (status === 'available') {
+                    display = `🟩${seatNo}`;
+                } else if (status === 'booked' || status === 'locked') {
+                    const genderTag = data.gender === 'F' ? 'F' : 'M';
+                    display = `⚫${seatNo}${genderTag}`;
+                } 
+                
+                line += `${display}`;
+                if (col === 'B') {
+                    line += `     🚌     `;
+                } else {
+                    line += ` `;
+                }
+            }
+            seatMap += line + '\n';
+        }
+        
+        seatMap += `\n📊 *${availableCount}* seats available / ${seatsSnapshot.size || 0}\n\n`;
+        seatMap += `💡 *Book a seat:* "Book seat ${busID} 1A"`;
+
+        await sendMessage(chatId, seatMap, "Markdown");
+        
+    } catch (error) {
+        console.error('❌ Seat map error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleSeatSelection(chatId, text) {
+    try {
+        const match = text.match(/book seat\s+(BUS\d+)\s+([A-Z0-9]+)/i);
+        if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID and Seat Number.\nExample: `Book seat BUS101 3A`", "Markdown");
+
+        const busID = match[1].toUpperCase();
+        const seatNo = match[2].toUpperCase();
+
+        const db = getFirebaseDb();
+        
+        const seatRef = db.collection('seats').doc(`${busID}-${seatNo}`);
+        const seatDoc = await seatRef.get();
+
+        if (!seatDoc.exists || seatDoc.data().status !== 'available') {
+              return await sendMessage(chatId, MESSAGES.seat_not_available.replace('{seatNo}', seatNo).replace('{busID}', busID), "Markdown");
+        }
+
+        const bookingData = {
+            busID,
+            seatNo,
+            passengers: [],
+        };
+        await saveAppState(chatId, 'AWAITING_GENDER_SELECTION', bookingData);
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "🚹 Male", callback_data: `cb_select_gender_M` }],
+                [{ text: "🚺 Female", callback_data: `cb_select_gender_F` }],
+            ]
+        };
+        await sendMessage(chatId, MESSAGES.gender_prompt.replace('{seatNo}', seatNo), "Markdown", keyboard);
+        
+    } catch (error) {
+        console.error('❌ handleSeatSelection error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleGenderSelectionCallback(chatId, callbackData) {
+    try {
+        const gender = callbackData.split('_').pop();
+        const state = await getAppState(chatId);
+        const { busID, seatNo } = state.data;
+        
+        if (gender === 'M') {
+            const isSafe = await checkSeatSafety(busID, seatNo, gender);
+            if (!isSafe) {
+                await saveAppState(chatId, 'IDLE', {});
+                return await sendMessage(chatId, MESSAGES.safety_violation.replace('{seatNo}', seatNo), "Markdown");
+            }
+        }
+        
+        const db = getFirebaseDb();
+        await db.collection('seats').doc(`${busID}-${seatNo}`).update({ 
+            status: 'locked', 
+            temp_chat_id: String(chatId),
+            gender: gender
+        });
+        
+        state.data.gender = gender;
+        state.data.seats = [{ seatNo, status: 'locked', gender: gender }];
+        state.data.currentSeatIndex = 0; 
+
+        await saveAppState(chatId, 'AWAITING_PASSENGER_DETAILS', state.data);
+
+        await sendMessage(chatId, MESSAGES.details_prompt, "Markdown");
+        
+    } catch (error) {
+        console.error('❌ handleGenderSelectionCallback error:', error.message);
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleBookingInput(chatId, text, state) {
+    const booking = state.data;
+    
+    if (state.state === 'AWAITING_PASSENGER_DETAILS') {
+        const passengerMatch = text.match(/([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
+        if (!passengerMatch) return await sendMessage(chatId, MESSAGES.booking_details_error, "Markdown");
+
+        const name = passengerMatch[1].trim();
+        const age = passengerMatch[2].trim();
+        const aadhar = passengerMatch[3].trim();
+        
+        booking.passengers.push({ name, age, aadhar, gender: booking.gender, seat: booking.seatNo });
+        
+        await saveAppState(chatId, 'AWAITING_BOOKING_ACTION', booking);
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "➕ Add Another Passenger", callback_data: "cb_add_passenger" }],
+                [{ text: "✅ Complete Booking", callback_data: "cb_book_finish" }]
+            ]
+        };
+        await sendMessage(chatId, MESSAGES.booking_passenger_prompt.replace('{count}', booking.passengers.length).replace('{seatNo}', booking.seatNo), "Markdown", keyboard);
+        
+        return;
+    }
+    
+    await sendMessage(chatId, "Please use the provided buttons to continue (Add Another Passenger or Complete Booking).", "Markdown");
+}
+
+async function handleAddPassengerCallback(chatId) {
+    try {
+        const state = await getAppState(chatId);
+        const booking = state.data;
+        
+        if (state.state !== 'AWAITING_BOOKING_ACTION') return await sendMessage(chatId, "❌ Please start a new booking first (Book seat BUS ID).");
+        
+        return await sendMessage(chatId, MESSAGES.feature_wip + " Multi-passenger booking requires selecting a new seat first.", "Markdown");
+
+    } catch (error) {
+        console.error('❌ handleAddPassengerCallback error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function createPaymentOrder(chatId, booking) {
+    try {
+        const pricePerSeat = 45000;
+        const totalAmount = booking.passengers.length * pricePerSeat;
+        const bookingId = 'BOOK' + Date.now();
+
+        const order = await razorpay.orders.create({
+            amount: totalAmount,
+            currency: "INR",
+            receipt: bookingId, 
+        });
+
+        booking.razorpay_order_id = order.id;
+        booking.total_amount = totalAmount;
+        booking.bookingId = bookingId;
+        booking.chat_id = String(chatId);
+
+        await saveAppState(chatId, 'AWAITING_PAYMENT', booking);
+        
+        const db = getFirebaseDb();
+        await db.collection('payment_sessions').doc(order.id).set({
+            booking: booking,
+            created_at: admin.firestore.FieldValue.serverTimestamp()
+        });
+        
+        const paymentUrl = `https://rzp.io/i/${order.id}`;
+        
+        await sendMessage(chatId, 
+            MESSAGES.payment_required.replace('{amount}', (totalAmount / 100).toFixed(2)).replace('{paymentUrl}', paymentUrl).replace('{orderId}', order.id), 
+            "Markdown");
+
+    } catch (error) {
+        console.error('❌ Payment Order Creation Error:', error.message);
+        await unlockSeats(booking);
+        await sendMessage(chatId, MESSAGES.db_error + " Failed to create payment order. Seats were released.");
+    }
+}
+
+async function commitFinalBookingBatch(chatId, booking) {
+    const db = getFirebaseDb();
+    const batch = db.batch();
+    const dateTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+    const bookingRef = db.collection('bookings').doc(booking.bookingId);
+    batch.set(bookingRef, {
+        booking_id: booking.bookingId,
+        chat_id: String(chatId),
+        bus_id: booking.busID,
+        passengers: booking.passengers,
+        seats: booking.seats.map(s => s.seatNo),
+        status: 'confirmed',
+        total_seats: booking.passengers.length,
+        total_paid: booking.total_amount,
+        razorpay_order_id: booking.razorpay_order_id,
+        created_at: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    booking.seats.forEach(seat => {
+        const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
+        batch.update(seatRef, { 
+            status: 'booked', 
+            booking_id: booking.bookingId, 
+            temp_chat_id: admin.firestore.FieldValue.delete() 
+        });
+    });
+
+    batch.delete(db.collection('user_state').doc(String(chatId)));
+    batch.delete(db.collection('payment_sessions').doc(booking.razorpay_order_id));
+    
+    await batch.commit();
+
+    await sendManagerNotification(booking.busID, 'BOOKING', { 
+        seats: booking.seats,
+        passengerName: booking.passengers[0].name,
+        dateTime: dateTime
+    });
+
+    await sendMessage(chatId, MESSAGES.booking_finish.replace('{bookingId}', booking.bookingId).replace('{count}', booking.passengers.length), "Markdown");
+}
+
+async function handlePaymentVerification(chatId, booking) {
+    try {
+        await commitFinalBookingBatch(chatId, booking);
+        
+    } catch (error) {
+        console.error('❌ Payment Verification Error:', error.message);
+        await sendMessage(chatId, MESSAGES.payment_failed);
+    }
+}
+
+/* --------------------- Manager Flow Handlers ---------------------- */
+
+async function handleManagerAddBus(chatId) {
+    try {
+        const userRole = await getUserRole(chatId);
+        if (userRole !== 'manager' && userRole !== 'owner') {
+             return await sendMessage(chatId, "❌ You do not have permission to add buses.");
+        }
+        
+        await saveAppState(chatId, 'MANAGER_ADD_BUS_NUMBER', {});
+        await sendMessage(chatId, MESSAGES.manager_add_bus_init, "Markdown");
+
+    } catch (error) {
+        console.error('❌ Manager Add Bus error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleManagerInput(chatId, text, state) {
+    const db = getFirebaseDb();
+    const data = state.data;
+    let nextState = '';
+    let response = '';
+
+    const timeRegex = /^\d{2}:\d{2}$/;
+    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    const phoneRegex = /^\d{10}$/;
+    const validLayouts = ['seater', 'sleeper', 'both'];
+    const validSeatTypes = ['sleeper upper', 'sleeper lower', 'seater'];
+
+    try {
+        switch (state.state) {
+            case 'MANAGER_ADD_BUS_NUMBER': 
+                data.busNumber = text.toUpperCase().replace(/[^A-Z0-9\s-]/g, '');
+                if (!data.busNumber) return await sendMessage(chatId, "❌ Invalid Bus Number. Try again:", "Markdown");
+                
+                nextState = 'MANAGER_ADD_BUS_NAME';
+                response = MESSAGES.manager_add_bus_number;
+                break;
+                
+            case 'MANAGER_ADD_BUS_NAME':
+                data.busName = text;
+                nextState = 'MANAGER_ADD_BUS_ROUTE';
+                response = MESSAGES.manager_add_bus_route;
+                break;
+                
+            case 'MANAGER_ADD_BUS_ROUTE':
+                data.route = text;
+                nextState = 'MANAGER_ADD_BUS_PRICE';
+                response = MESSAGES.manager_add_bus_price;
+                break;
+
+            case 'MANAGER_ADD_BUS_PRICE':
+                data.price = parseFloat(text.replace(/[^0-9.]/g, ''));
+                if (isNaN(data.price)) return await sendMessage(chatId, "❌ Invalid price. Enter a number (e.g., 850):", "Markdown");
+                
+                nextState = 'MANAGER_ADD_BUS_TYPE';
+                response = MESSAGES.manager_add_bus_type;
+                break;
+                
+            case 'MANAGER_ADD_BUS_TYPE':
+                data.busLayout = text.toLowerCase().trim();
+                if (!validLayouts.includes(data.busLayout)) return await sendMessage(chatId, MESSAGES.manager_invalid_layout, "Markdown");
+
+                data.seatsToConfigure = [];
+                
+                if (data.busLayout === 'seater' || data.busLayout === 'sleeper' || data.busLayout === 'both') {
+                    data.currentRow = 1;
+                    nextState = 'MANAGER_ADD_SEAT_TYPE';
+                    response = MESSAGES.manager_add_seat_type.replace('{row}', data.currentRow);
+                } else {
+                    nextState = 'MANAGER_ADD_BUS_DEPART_DATE';
+                    response = MESSAGES.manager_add_bus_depart_date;
+                }
+                break;
+                
+            case 'MANAGER_ADD_SEAT_TYPE':
+                const seatTypeInput = text.toLowerCase().trim();
+                const isValidSeatType = validSeatTypes.includes(seatTypeInput);
+
+                if (!isValidSeatType) return await sendMessage(chatId, MESSAGES.manager_invalid_seat_type, "Markdown");
+
+                data.seatsToConfigure.push({
+                    row: data.currentRow,
+                    type: seatTypeInput
+                });
+
+                data.currentRow++;
+                
+                if (data.currentRow <= 10) {
+                    nextState = 'MANAGER_ADD_SEAT_TYPE';
+                    response = MESSAGES.manager_add_seat_type.replace('{row}', data.currentRow);
+                } else {
+                    nextState = 'MANAGER_ADD_BUS_DEPART_DATE';
+                    response = MESSAGES.manager_add_bus_depart_date;
+                }
+                break;
+                
+            case 'MANAGER_ADD_BUS_DEPART_DATE':
+                if (!text.match(dateRegex)) return await sendMessage(chatId, "❌ Invalid date format (YYYY-MM-DD). Try again:", "Markdown");
+                data.departDate = text;
+                nextState = 'MANAGER_ADD_BUS_DEPART_TIME';
+                response = MESSAGES.manager_add_bus_depart_time;
+                break;
+                
+            case 'MANAGER_ADD_BUS_DEPART_TIME':
+                if (!text.match(timeRegex)) return await sendMessage(chatId, "❌ Invalid time format (HH:MM). Try again:", "Markdown");
+                data.departTime = text;
+                nextState = 'MANAGER_ADD_BUS_ARRIVE_TIME';
+                response = MESSAGES.manager_add_bus_arrive_time;
+                break;
+
+            case 'MANAGER_ADD_BUS_ARRIVE_TIME':
+                if (!text.match(timeRegex)) return await sendMessage(chatId, "❌ Invalid time format (HH:MM). Try again:", "Markdown");
+                data.arriveTime = text;
+                nextState = 'MANAGER_ADD_BUS_MANAGER_PHONE';
+                response = MESSAGES.manager_add_bus_manager_phone;
+                break;
+
+            case 'MANAGER_ADD_BUS_MANAGER_PHONE':
+                data.managerPhone = text.replace(/[^0-9]/g, '');
+                if (!data.managerPhone.match(phoneRegex)) return await sendMessage(chatId, "❌ Invalid Phone Number. Enter a 10-digit number:", "Markdown");
+                
+                const userDoc = await db.collection('users').doc(String(chatId)).get();
+                const ownerName = userDoc.exists ? userDoc.data().name : 'System Owner';
+
+                const uniqueBusId = `BUS${Date.now()}`;
+                
+                if (userDoc.exists) {
+                    await db.collection('users').doc(String(chatId)).update({
+                        phone: data.managerPhone
+                    });
+                }
+
+                await db.collection('buses').doc(uniqueBusId).set({
+                    bus_id: uniqueBusId,
+                    bus_number: data.busNumber,
+                    bus_name: data.busName,
+                    owner: ownerName,
+                    from: data.route.split(' to ')[0].trim(),
+                    to: data.route.split(' to ')[1].trim(),
+                    departure_time: `${data.departDate} ${data.departTime}`, 
+                    arrival_time: data.arriveTime,
+                    manager_phone: data.managerPhone,
+                    price: data.price,
+                    bus_type: data.busLayout,
+                    seat_configuration: data.seatsToConfigure,
+                    total_seats: 40, 
+                    rating: 5.0,
+                    status: 'scheduled'
+                });
+                
+                await db.collection('user_state').doc(String(chatId)).delete(); 
+
+                response = MESSAGES.manager_bus_saved
+                    .replace('{busID}', uniqueBusId)
+                    .replace('{busNumber}', data.busNumber)
+                    .replace('{busName}', data.busName)
+                    .replace('{route}', data.route)
+                    .replace('{departDate}', data.departDate)
+                    .replace('{departTime}', data.departTime)
+                    .replace('{arriveTime}', data.arriveTime);
+                await sendMessage(chatId, response, "Markdown");
+                return;
+        }
+
+        await saveAppState(chatId, nextState, data);
+        await sendMessage(chatId, response, "Markdown");
+
+    } catch (error) {
+        console.error('❌ Manager Input Flow Error:', error.message);
+        await db.collection('user_state').doc(String(chatId)).delete();
+        await sendMessage(chatId, MESSAGES.db_error + " Bus creation failed. Please try again.");
+    }
+}
+
+async function handleAddSeatsCommand(chatId, text) {
+    const match = text.match(/add seats\s+(BUS\d+)\s+(\d+)/i);
+    if (!match) return await sendMessage(chatId, MESSAGES.manager_seats_invalid, "Markdown");
+
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+          return await sendMessage(chatId, "❌ You do not have permission to add seats.");
+    }
+    
+    const busID = match[1].toUpperCase();
+    const count = parseInt(match[2], 10);
+    
+    if (count > 40 || count < 1) return await sendMessage(chatId, "❌ Seat count must be between 1 and 40.");
+
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID ${busID} does not exist. Please create it first.`);
+        
+        const config = busDoc.data().seat_configuration || [];
+        if (config.length === 0) return await sendMessage(chatId, `❌ Bus ${busID} configuration missing. Please start the bus creation process again.`);
+
+        const batch = db.batch();
+        let seatsAdded = 0;
+        
+        const seatCols = ['A', 'B', 'C', 'D'];
+        
+        for (const rowConfig of config) {
+            if (seatsAdded >= count) break;
+            
+            const rowIndex = rowConfig.row;
+            const seatType = rowConfig.type;
+            
+            for (let col of seatCols) {
+                if (seatsAdded >= count) break;
+                
+                const seatNo = `${rowIndex}${col}`;
+                const docId = `${busID}-${seatNo}`;
+                const seatRef = db.collection('seats').doc(docId);
+                
+                batch.set(seatRef, {
+                    bus_id: busID,
+                    seat_no: seatNo,
+                    status: 'available',
+                    gender: null,
+                    type: seatType,
+                });
+                seatsAdded++;
+            }
+        }
+        
+        await batch.commit();
+        await sendMessage(chatId, MESSAGES.manager_seats_saved.replace('{busID}', busID), "Markdown");
+
+    } catch (error) {
+        console.error('❌ Add Seats Command Error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error + " Seat creation failed.");
+    }
+}
+
+async function handleInventorySyncSetup(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+          return await sendMessage(chatId, "❌ You do not have permission to manage inventory sync.");
+    }
+    
+    await saveAppState(chatId, 'MANAGER_SYNC_SETUP_BUSID', {});
+    await sendMessage(chatId, MESSAGES.sync_setup_init, "Markdown");
+}
+
+async function handleInventorySyncInput(chatId, text, state) {
+    const db = getFirebaseDb();
+    const data = state.data;
+    let nextState = '';
+    let response = '';
+    const urlRegex = /^(http|https):\/\/[^ "]+$/;
+
+    try {
+        switch (state.state) {
+            case 'MANAGER_SYNC_SETUP_BUSID':
+                data.busID = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+                const busDoc = await db.collection('buses').doc(data.busID).get();
+                if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID ${data.busID} does not exist. Please create it first.`);
+                
+                nextState = 'MANAGER_SYNC_SETUP_URL';
+                response = MESSAGES.sync_setup_url.replace('{busID}', data.busID);
+                break;
+                
+            case 'MANAGER_SYNC_SETUP_URL':
+                data.syncUrl = text.trim();
+                if (!data.syncUrl.match(urlRegex)) return await sendMessage(chatId, "❌ Invalid URL format. Must start with http:// or https://. Try again:");
+                
+                await db.collection('buses').doc(data.busID).update({
+                    osp_api_endpoint: data.syncUrl,
+                    sync_status: 'Pending Sync',
+                    last_sync_attempt: admin.firestore.FieldValue.serverTimestamp()
+                });
+                
+                await saveAppState(chatId, 'IDLE', {}); 
+
+                response = MESSAGES.sync_success.replace('{busID}', data.busID).replace('{url}', data.syncUrl);
+                await sendMessage(chatId, response, "Markdown");
+                return;
+        }
+
+        await saveAppState(chatId, nextState, data);
+        await sendMessage(chatId, response, "Markdown");
+
+    } catch (error) {
+        console.error('❌ Inventory Sync Flow Error:', error.message);
+        await db.collection('user_state').doc(String(chatId)).delete(); 
+        await sendMessage(chatId, MESSAGES.db_error + " Inventory sync setup failed. Please try again.");
+    }
+}
+
+/* --------------------- Message Router ---------------------- */
+
+async function handleUserMessage(chatId, text, user) {
+    const textLower = text.toLowerCase().trim();
+
+    // --- STATE MANAGEMENT CHECK (Highest Priority) ---
+    const state = await getAppState(chatId);
+    if (state.state !== 'IDLE') {
+        if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
+            await handleBookingInput(chatId, text, state);
+        } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
+            await handleManagerInput(chatId, text, state);
+        } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
+            await sendMessage(chatId, MESSAGES.feature_wip);
+        } else if (state.state === 'AWAITING_NEW_PHONE') { 
+            await handlePhoneUpdateInput(chatId, text);
+        } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
+            await handleInventorySyncInput(chatId, text, state);
+        } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') {
+            await handlePaymentVerification(chatId, state.data);
+            return;
+        }
+        return;
+    }
+
+    // --- STANDARD COMMANDS ---
+    if (textLower === '/start') {
+        await startUserRegistration(chatId, user);
+    }
+    else if (textLower.startsWith('my profile details')) {
+        await handleProfileUpdate(chatId, text);
+    }
+    else if (textLower === 'book bus' || textLower === '/book') {
+        await handleBusSearch(chatId);
+    }
+    else if (textLower.startsWith('show seats')) {
+        await handleSeatMap(chatId, text);
+    }
+    else if (textLower.startsWith('book seat')) {
+        await handleSeatSelection(chatId, text);
+    }
+    else if (textLower.startsWith('cancel booking')) {
+        await handleCancellation(chatId, text);
+    }
+    else if (textLower.startsWith('my profile') || textLower === '/profile') {
+        await handleUserProfile(chatId);
+    }
+    else if (textLower.startsWith('add seats')) {
+        await handleAddSeatsCommand(chatId, text);
+    }
+    else if (textLower.startsWith('live tracking')) { 
+        await sendMessage(chatId, MESSAGES.feature_wip);
+    }
+    else if (textLower === 'help' || textLower === '/help') {
+        await sendHelpMessage(chatId);
+    }
+    else { 
+        await sendMessage(chatId, MESSAGES.unknown_command, "Markdown");
+    }
 }
 
 /* --------------------- Main Webhook Handler ---------------------- */
 
 app.post('/api/webhook', async (req, res) => {
-    const update = req.body;
-    
-    try {
-        if (update.message) {
-            const message = update.message;
-            const chatId = message.chat.id;
-            const text = message.text ? message.text.trim() : '';
-            const user = message.from;
-            
-            await handleUserMessage(chatId, text, user);
-            
-        } else if (update.callback_query) {
-            const callback = update.callback_query;
-            const chatId = callback.message.chat.id;
-            const messageId = callback.message.message_id;
-            const user = callback.from;
-            
-            await handleCallbackQuery(chatId, callback, messageId, user);
-        }
-    } catch (error) {
-        console.error("Webhook handler error:", error.message);
-    }
+    const update = req.body;
 
-    res.status(200).send('OK');
+    // --- CRITICAL INITIALIZATION & TOKEN CHECK (ADDED) ---
+    // This is crucial to diagnose the "no response" issue. If the token is missing, 
+    // the bot will fail silently when trying to send messages.
+    if (!TELEGRAM_TOKEN) {
+        console.error("❌ CRITICAL: TELEGRAM_TOKEN is missing. Bot cannot respond. Please set the environment variable.");
+        // We must still return 200 OK to prevent Telegram from infinitely retrying.
+        return res.status(200).send('OK (Token Missing)'); 
+    }
+    
+    // Check Firebase Initialization immediately (if it hasn't been done yet)
+    try {
+        getFirebaseDb();
+    } catch (e) {
+        console.error("CRITICAL FIREBASE INITIALIZATION ERROR on webhook call:", e.message);
+        // We proceed, but the internal logic that needs the DB will catch the error and try to notify the user.
+    }
+    // --- END CRITICAL INITIALIZATION CHECK ---
+
+    try {
+        if (update.message && update.message.text) {
+            const message = update.message;
+            const chatId = message.chat.id;
+            const text = message.text ? message.text.trim() : '';
+            const user = message.from;
+            
+            await sendChatAction(chatId, "typing");
+            await handleUserMessage(chatId, text, user);
+        
+        } else if (update.callback_query) {
+            const callback = update.callback_query;
+            const chatId = callback.message.chat.id;
+            const callbackData = callback.data;
+            const messageId = callback.message.message_id;
+            
+            await answerCallbackQuery(callback.id);
+            await editMessageReplyMarkup(chatId, messageId, null);
+
+            await sendChatAction(chatId, "typing");
+
+            // --- ROUTE CALLBACKS ---
+            if (callbackData.startsWith('cb_register_role_')) {
+                await handleRoleSelection(chatId, callback.from, callbackData);
+            } else if (callbackData === 'cb_book_bus') {
+                await handleBusSearch(chatId);
+            } else if (callbackData === 'cb_booking_single') {
+                await showAvailableBuses(chatId);
+            } else if (callbackData === 'cb_my_booking') {
+                await handleBookingInfo(chatId);
+            } else if (callbackData === 'cb_my_profile') {
+                await handleUserProfile(chatId);
+            } else if (callbackData === 'cb_add_bus_manager') {
+                await handleManagerAddBus(chatId);
+            } else if (callbackData === 'cb_start_tracking') { 
+                await sendMessage(chatId, MESSAGES.feature_wip);
+            } else if (callbackData === 'cb_inventory_sync') { 
+                await handleInventorySyncSetup(chatId);
+            } else if (callbackData === 'cb_update_phone') { 
+                await handleUpdatePhoneNumberCallback(chatId);
+            } else if (callbackData.startsWith('cb_select_gender_')) { 
+                await handleGenderSelectionCallback(chatId, callbackData);
+            } else if (callbackData === 'cb_add_passenger') { 
+                await handleAddPassengerCallback(chatId);
+            } else if (callbackData === 'cb_book_finish') { 
+                const state = await getAppState(chatId);
+                if (state.state === 'AWAITING_BOOKING_ACTION') {
+                    await createPaymentOrder(chatId, state.data);
+                } else {
+                    await sendMessage(chatId, "❌ You don't have an active booking to finish.");
+                }
+            } else if (callbackData === 'cb_help' || callbackData === 'cb_status') {
+                await sendHelpMessage(chatId);
+            } else if (callbackData === 'cb_booking_couple' || callbackData === 'cb_booking_family') {
+                await sendMessage(chatId, MESSAGES.feature_wip);
+            }
+        }
+    } catch (error) {
+        console.error("Error in main handler:", error.message);
+    }
+
+    res.status(200).send('OK');
 });
 
-// Health check endpoint
+// --- NEW RAZORPAY WEBHOOK ENDPOINT ---
+app.post('/api/razorpay/webhook', async (req, res) => {
+    const signature = req.headers['x-razorpay-signature'];
+    const payload = req.rawBody; 
+
+    res.status(200).send('OK');
+
+    if (RAZORPAY_WEBHOOK_SECRET && !verifyRazorpaySignature(payload, signature)) {
+        console.error("WEBHOOK ERROR: Signature verification failed. Ignoring update.");
+        return; 
+    }
+
+    const event = req.body.event;
+    
+    if (event === 'payment.failed' || event === 'order.paid') {
+        const orderId = req.body.payload.order.entity.id;
+        const db = getFirebaseDb();
+        
+        const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
+
+        if (sessionDoc.exists) {
+            const bookingData = sessionDoc.data().booking;
+            
+            if (event === 'order.paid') {
+                await commitFinalBookingBatch(bookingData.chat_id, bookingData); 
+            } else if (event === 'payment.failed') {
+                await unlockSeats(bookingData);
+                await db.collection('payment_sessions').doc(orderId).delete();
+                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
+            }
+        }
+    }
+});
+
+// Add a simple health check endpoint
 app.get('/', (req, res) => {
-    res.status(200).json({ 
-        status: 'OK', 
-        message: 'GoRoute Telegram Bot is running smoothly',
-        timestamp: new Date().toISOString(),
-        features: ['Bus Booking', 'Seat Selection', 'Profile Management', 'Live Support']
-    });
+    res.status(200).json({ 
+        status: 'OK', 
+        message: 'GoRoute Telegram Bot is running',
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Start the server
 module.exports = app;
-
-console.log("🚀 GoRoute Bot Server Started Successfully!");
+// Export cron function so Vercel can run it
+module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
