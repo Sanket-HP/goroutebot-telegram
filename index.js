@@ -537,7 +537,7 @@ async function handleCancellation(chatId, text) {
 }
 
 async function startUserRegistration(chatId, user) {
-    console.log(`[DEBUG] Entering startUserRegistration for ${chatId}`); // DEBUG LOG 1
+    console.log(`[DEBUG] Starting /start flow for ${chatId}`); // NEW SYNCHRONOUS ENTRY LOG
     try {
         const db = getFirebaseDb();
         
@@ -1553,8 +1553,20 @@ async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
         await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
         console.log(`[DEBUG] Message sent successfully to ${chatId}.`); // ADDED DEBUG LOG
     } catch (error) {
-        console.error(`❌ TELEGRAM API ERROR for ${chatId}:`, error.message); // CRITICAL ERROR LOG
-        // Note: Suppressing error throwing to allow webhook to return 200 OK.
+        if (error.response) {
+            // Log the detailed error response from Telegram
+            console.error(`❌ TELEGRAM API ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
+            // Check for common fatal errors like "bot was blocked by the user"
+            if (error.response.data.description && error.response.data.description.includes('bot was blocked by the user')) {
+                console.error(`--- FATAL: User ${chatId} has blocked the bot. Cannot send messages. ---`);
+            }
+        } else if (error.request) {
+            // Log network errors (timeouts, DNS issues)
+            console.error(`❌ TELEGRAM NETWORK ERROR for ${chatId}: No response received. Message: ${error.message}`);
+        } else {
+            // Log other setup errors
+            console.error(`❌ TELEGRAM SETUP ERROR for ${chatId}: ${error.message}`);
+        }
     }
 }
 
