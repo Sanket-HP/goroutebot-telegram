@@ -115,20 +115,24 @@ function getFirebaseDb() {
     const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
     const serviceAccount = JSON.parse(jsonString);
 
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
+    // --- FIX: Attempt initialization, but catch the error if it's already running ---
+    try {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+    } catch (error) {
+        // Error: "The default Firebase app already exists." is expected on Vercel cold restarts
+        if (!error.message.includes("default Firebase app already exists")) {
+            throw error;
+        }
+    }
     
+    // Get the Firestore instance (whether new or already existing)
     db = admin.firestore();
     return db;
 
   } catch (e) {
     console.error("CRITICAL FIREBASE ERROR", e.message);
-    // Fallback if the standard initialization fails (e.g., duplicate initialization)
-    if (admin.apps.length > 0) {
-        db = admin.app().firestore();
-        return db;
-    }
     throw e; 
   }
 }
