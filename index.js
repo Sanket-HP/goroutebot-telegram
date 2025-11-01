@@ -7,6 +7,7 @@ const Razorpay = require('razorpay'); // NEW: Import Razorpay
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET; // Needed for webhook verification
 
 // --- Razorpay Initialization ---
 const razorpay = new Razorpay({
@@ -55,7 +56,7 @@ Select an option from the menu below to get started. You can also type commands 
   payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).",
   payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
 
-  // Manager (UPDATED PROMPTS)
+  // Manager
   manager_add_bus_init: "📝 *Bus Creation:* Enter the **Bus Number** (e.g., `MH-12 AB 1234`):",
   manager_add_bus_number: "🚌 Enter the **Bus Name** (e.g., `Sharma Travels`):", // New Prompt
   manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
