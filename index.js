@@ -2,20 +2,16 @@
 const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
-const Razorpay = require('razorpay'); 
-const crypto = require('crypto'); // Used for security verification
+const Razorpay = require('razorpay'); // NEW: Import Razorpay
 
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-const RAZORPAY_KEY_ID = process.env.RAZORPAY_KEY_ID;
-const RAZORPAY_KEY_SECRET = process.env.RAZORPAY_KEY_SECRET;
-const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET; // CRITICAL: New Vercel Environment Variable needed
 
 // --- Razorpay Initialization ---
 const razorpay = new Razorpay({
-    key_id: RAZORPAY_KEY_ID,
-    key_secret: RAZORPAY_KEY_SECRET,
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
 // --- MESSAGES ---
@@ -109,6 +105,7 @@ function getFirebaseDb() {
     // --- SAFETY CHECK ---
     const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
     if (!rawCredsBase64) {
+      // This is the CRITICAL ERROR handler. It throws, so the caller can send a message.
       throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
     }
     
@@ -124,17 +121,13 @@ function getFirebaseDb() {
 
   } catch (e) {
     console.error("CRITICAL FIREBASE ERROR", e.message);
+    // Fallback if the standard initialization fails (e.g., duplicate initialization)
+    if (admin.apps.length > 0) {
+        db = admin.app().firestore();
+        return db;
+    }
     throw e; 
   }
-}
-
-// --- Razorpay Security Verification Helper ---
-function verifyRazorpaySignature(payload, signature) {
-    const expectedSignature = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
-        .update(payload.rawBody.toString())
-        .digest('hex');
-        
-    return expectedSignature === signature;
 }
 
 
