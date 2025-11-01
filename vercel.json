@@ -1,15 +1,14 @@
 {
-  "version": 2,
-  "builds": [
+  "crons": [
     {
-      "src": "index.js",
-      "use": "@vercel/node"
+      "path": "/api/cron/tracking",
+      "schedule": "0,15,30,45 * * * *"
     }
   ],
-  "routes": [
+  "rewrites": [
     {
-      "src": "/api/webhook",
-      "dest": "index.js"
+      "source": "/api/cron/tracking",
+      "destination": "/api/tracker.js"
     }
   ]
 }
