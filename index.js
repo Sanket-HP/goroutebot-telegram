@@ -544,6 +544,7 @@ async function startUserRegistration(chatId, user) {
         console.log(`[DEBUG] Attempting Firestore user check for ${chatId}`); // DEBUG LOG 2 (Before dangerous await)
         const doc = await db.collection('users').doc(String(chatId)).get();
         console.log(`[DEBUG] Firestore user check complete. User exists: ${doc.exists}`); // DEBUG LOG 3 (After dangerous await)
+        console.log(`[DEBUG] Starting response message flow.`); // NEW INTERMEDIATE LOG
 
 
         if (doc.exists) {
@@ -1541,6 +1542,10 @@ async function sendLiveLocationUpdates() {
 /* --------------------- Telegram Axios Helpers ---------------------- */
 
 async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
+    if (!TELEGRAM_TOKEN) {
+        console.error("❌ CRITICAL: TELEGRAM_TOKEN environment variable is missing. Cannot send message.");
+        return; 
+    }
     try {
         const payload = { chat_id: chatId, text: text, parse_mode: parseMode };
         if (replyMarkup) payload.reply_markup = replyMarkup;
