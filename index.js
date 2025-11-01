@@ -331,7 +331,6 @@ async function handleUserMessage(chatId, text, user) {
         await sendHelpMessage(chatId);
     }
     else { 
-        // FIX: Ensure MESSAGES.unknown_command is defined or this line will crash if it's not.
         await sendMessage(chatId, MESSAGES.unknown_command, "Markdown");
     }
 }
@@ -540,7 +539,9 @@ async function startUserRegistration(chatId, user) {
         const doc = await db.collection('users').doc(String(chatId)).get();
 
         if (doc.exists) {
-            await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', user.first_name || 'User'));
+             // FIX: Add safety check for user.first_name to prevent string replacement errors
+            const userName = user.first_name || 'User'; 
+            await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
             await sendHelpMessage(chatId); 
         } else {
             const keyboard = {
@@ -550,7 +551,6 @@ async function startUserRegistration(chatId, user) {
                     [{ text: "👑 Bus Owner (Manage Staff)", callback_data: "cb_register_role_owner" }],
                 ]
             };
-            // FIX: Ensure this sendMessage is correct, as it's the expected response.
             await sendMessage(chatId, MESSAGES.prompt_role, "Markdown", keyboard);
         }
     } catch (error) {
