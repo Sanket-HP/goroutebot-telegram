@@ -143,18 +143,25 @@ async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
     try {
         const payload = { chat_id: chatId, text: text, parse_mode: parseMode };
         if (replyMarkup) payload.reply_markup = replyMarkup;
-        await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+        
+        // --- NEW: Enhanced logging for sendMessage failure ---
+        const response = await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+        console.log(`[TELEGRAM] Message sent successfully to ${chatId}.`);
+        // --- END NEW ---
     } catch (error) {
+        // --- NEW: Detailed logging for Telegram API failure ---
         if (error.response) {
-            console.error(`❌ TELEGRAM API ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
-            if (error.response.data.description && error.response.data.description.includes('bot was blocked by the user')) {
-                console.error(`--- FATAL: User ${chatId} has blocked the bot. Cannot send messages. ---`);
+            console.error(`❌ TELEGRAM API ERROR (Status ${error.response.status}) for ${chatId}: ${error.response.data.description || JSON.stringify(error.response.data)}`);
+            // This is the CRITICAL line that will show why the message failed.
+            if (error.response.data.error_code === 401) {
+                console.error("--- FATAL: 401 Unauthorized. CHECK TELEGRAM_TOKEN environment variable in Vercel. ---");
             }
         } else if (error.request) {
             console.error(`❌ TELEGRAM NETWORK ERROR for ${chatId}: No response received. Message: ${error.message}`);
         } else {
             console.error(`❌ TELEGRAM SETUP ERROR for ${chatId}: ${error.message}`);
         }
+        // --- END NEW ---
     }
 }
 
