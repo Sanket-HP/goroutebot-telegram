@@ -2,8 +2,8 @@
 const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
-const Razorpay = require('razorpay'); // NEW: Import Razorpay
-const crypto = require('crypto'); // FIX: Added missing crypto import
+const Razorpay = require('razorpay'); 
+const crypto = require('crypto'); // FIX: Ensure crypto is imported correctly
 
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
