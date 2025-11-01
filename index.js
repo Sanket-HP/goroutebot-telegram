@@ -295,7 +295,7 @@ async function handleUserMessage(chatId, text, user) {
   else if (textLower.startsWith('cancel booking')) {
     await handleCancellation(chatId, text);
   }
-  else if (textLower === 'my profile' || textLower === '/profile') {
+  else if (textLower.startsWith('my profile') || textLower === '/profile') {
     await handleUserProfile(chatId);
   }
   else if (textLower.startsWith('add seats')) {
