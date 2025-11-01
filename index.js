@@ -300,6 +300,7 @@ async function handleUserMessage(chatId, text, user) {
 
     // --- STANDARD COMMANDS ---
     if (textLower === '/start') {
+        console.log(`[DEBUG] Routing to startUserRegistration for ${chatId}`); // ADDED DEBUG LOG
         await startUserRegistration(chatId, user);
     }
     else if (textLower.startsWith('my profile details')) {
