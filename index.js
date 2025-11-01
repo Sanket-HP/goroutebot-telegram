@@ -55,8 +55,10 @@ Select an option from the menu below to get started. You can also type commands 
     // Payment
     // Note: Anchor tags use href for the payment link
     payment_required: "💰 <b>Payment Required:</b> Total Amount: ₹{amount} INR.\n\n<b>Order ID: {orderId}</b>\n\n<a href='{paymentUrl}'>Click here to pay</a>\n\n<i>(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)</i>",
-    payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).",
+    payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).\n\nSelect an option below once payment is complete or if you wish to cancel.",
     payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
+    session_cleared: "🧹 <b>Previous booking session cleared.</b> Your locked seats have been released.",
+
 
     // Manager
     manager_add_bus_init: "📝 <b>Bus Creation:</b> Enter the <b>Bus Number</b> (e.g., <pre>MH-12 AB 1234</pre>):",
@@ -221,10 +223,14 @@ async function unlockSeats(booking) {
     try {
         const db = getFirebaseDb();
         const batch = db.batch();
-        booking.seats.forEach(seat => {
-            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
-            batch.update(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
-        });
+        // Check if booking has seats property and it's an array before iterating
+        if (booking && booking.seats && Array.isArray(booking.seats)) {
+             booking.seats.forEach(seat => {
+                const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
+                // Ensure to check if the seat exists before trying to delete the field.
+                batch.update(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+            });
+        }
         await batch.commit();
     } catch (e) {
         console.error("CRITICAL: Failed to unlock seats:", e.message);
@@ -909,9 +915,16 @@ async function createPaymentOrder(chatId, booking) {
         
         const paymentUrl = `https://rzp.io/i/${order.id}`;
         
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "✅ I have Paid (Confirm)", callback_data: "cb_payment_confirm" }],
+                [{ text: "❌ Cancel Booking", callback_data: "cb_payment_cancel" }]
+            ]
+        };
+
         await sendMessage(chatId, 
             MESSAGES.payment_required.replace('{amount}', (totalAmount / 100).toFixed(2)).replace('{paymentUrl}', paymentUrl).replace('{orderId}', order.id), 
-            "HTML");
+            "HTML", keyboard); // Pass keyboard here
 
     } catch (error) {
         console.error('❌ Payment Order Creation Error:', error.message);
@@ -919,6 +932,36 @@ async function createPaymentOrder(chatId, booking) {
         await sendMessage(chatId, MESSAGES.db_error + " Failed to create payment order. Seats were released.");
     }
 }
+
+async function handlePaymentCancelCallback(chatId) {
+    try {
+        const state = await getAppState(chatId);
+        if (state.state !== 'AWAITING_PAYMENT') {
+            return await sendMessage(chatId, "❌ No active payment session to cancel.");
+        }
+        const booking = state.data;
+        
+        // 1. Unlock seats
+        await unlockSeats(booking);
+        
+        // 2. Clear state and session
+        const db = getFirebaseDb();
+        if (booking.razorpay_order_id) {
+            // Delete payment session to prevent webhook confusion later
+            await db.collection('payment_sessions').doc(booking.razorpay_order_id).delete();
+        }
+        await saveAppState(chatId, 'IDLE', {});
+
+        // 3. Send confirmation
+        const response = `🗑️ <b>Booking Session Cancelled</b>\n\nYour tentative seats for <b>Order ID:</b> ${booking.razorpay_order_id || 'N/A'} have been released. Please start a new booking with /book.`;
+        await sendMessage(chatId, response, "HTML");
+        
+    } catch (e) {
+        console.error('❌ handlePaymentCancelCallback error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error + " Failed to cancel payment session.");
+    }
+}
+
 
 async function commitFinalBookingBatch(chatId, booking) {
     const db = getFirebaseDb();
@@ -964,8 +1007,6 @@ async function commitFinalBookingBatch(chatId, booking) {
 
 async function handlePaymentVerification(chatId, booking) {
     try {
-        // In a real scenario, you would perform server-to-server validation with Razorpay
-        // Since this is a mock flow, we trust the user's 'paid' message and proceed.
         await commitFinalBookingBatch(chatId, booking);
         
     } catch (error) {
@@ -1273,13 +1314,43 @@ async function handleInventorySyncInput(chatId, text, state) {
 
 async function handleUserMessage(chatId, text, user) {
     const textLower = text.toLowerCase().trim();
-
-    // --- STATE MANAGEMENT CHECK (Highest Priority) ---
     let state;
+    
+    // --- GLOBAL COMMANDS (Check first to allow flow breaking/reset) ---
+    if (textLower === '/start' || textLower === '/help' || textLower === 'help') {
+        try {
+            state = await getAppState(chatId);
+            // If stuck in payment, perform cleanup
+            if (state.state === 'AWAITING_PAYMENT' && state.data.busID) {
+                await unlockSeats(state.data);
+                const db = getFirebaseDb();
+                if (state.data.razorpay_order_id) {
+                    await db.collection('payment_sessions').doc(state.data.razorpay_order_id).delete();
+                }
+                await saveAppState(chatId, 'IDLE', {});
+                await sendMessage(chatId, MESSAGES.session_cleared, "HTML");
+            } else if (state.state !== 'IDLE') {
+                // Clear other non-critical pending states to allow starting over
+                await saveAppState(chatId, 'IDLE', {});
+            }
+        } catch (e) {
+            console.error('Error during global command cleanup:', e.message);
+        }
+        
+        // After cleanup, execute the command
+        if (textLower === '/start') {
+            await startUserRegistration(chatId, user);
+        } else {
+            await sendHelpMessage(chatId);
+        }
+        return;
+    }
+
+
+    // --- STATE MANAGEMENT CHECK (Handles sequential input/button click messages) ---
     try {
         state = await getAppState(chatId);
     } catch (e) {
-        // This means DB failed during state fetch.
         await sendMessage(chatId, MESSAGES.db_error + " (State check failed)");
         return;
     }
@@ -1295,20 +1366,23 @@ async function handleUserMessage(chatId, text, user) {
             await handlePhoneUpdateInput(chatId, text);
         } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
             await handleInventorySyncInput(chatId, text, state);
-        } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') {
-            await handlePaymentVerification(chatId, state.data);
-            return;
         } else if (state.state === 'AWAITING_PAYMENT') {
-            await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', state.data.razorpay_order_id), "HTML");
+            // User sent a message while waiting for payment, re-send the payment prompt with buttons
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: "✅ I have Paid (Confirm)", callback_data: "cb_payment_confirm" }],
+                    [{ text: "❌ Cancel Booking", callback_data: "cb_payment_cancel" }]
+                ]
+            };
+            const paymentUrl = `https://rzp.io/i/${state.data.razorpay_order_id}`;
+            
+            await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', state.data.razorpay_order_id), "HTML", keyboard);
         }
         return;
     }
 
-    // --- STANDARD COMMANDS ---
-    if (textLower === '/start') {
-        await startUserRegistration(chatId, user);
-    }
-    else if (textLower.startsWith('my profile details')) {
+    // --- STANDARD COMMANDS (IDLE state) ---
+    if (textLower.startsWith('my profile details')) {
         await handleProfileUpdate(chatId, text);
     }
     else if (textLower === 'book bus' || textLower === '/book') {
@@ -1331,9 +1405,6 @@ async function handleUserMessage(chatId, text, user) {
     }
     else if (textLower.startsWith('live tracking')) { 
         await sendMessage(chatId, MESSAGES.feature_wip);
-    }
-    else if (textLower === 'help' || textLower === '/help') {
-        await sendHelpMessage(chatId);
     }
     else { 
         await sendMessage(chatId, MESSAGES.unknown_command, "HTML");
@@ -1377,10 +1448,21 @@ app.post('/api/webhook', async (req, res) => {
             await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
 
             await sendChatAction(chatId, "typing");
+            
+            const state = await getAppState(chatId);
 
             // --- ROUTE CALLBACKS ---
             if (callbackData.startsWith('cb_register_role_')) {
                 await handleRoleSelection(chatId, callback.from, callbackData);
+            } else if (callbackData === 'cb_payment_confirm') { 
+                if (state.state === 'AWAITING_PAYMENT') {
+                    // This is the user confirming they have paid
+                    await handlePaymentVerification(chatId, state.data);
+                } else {
+                    await sendMessage(chatId, "❌ No active payment to confirm.");
+                }
+            } else if (callbackData === 'cb_payment_cancel') { 
+                await handlePaymentCancelCallback(chatId);
             } else if (callbackData === 'cb_book_bus') {
                 await handleBusSearch(chatId);
             } else if (callbackData === 'cb_booking_single') {
@@ -1400,7 +1482,6 @@ app.post('/api/webhook', async (req, res) => {
             } else if (callbackData === 'cb_add_passenger') { 
                 await handleAddPassengerCallback(chatId);
             } else if (callbackData === 'cb_book_finish') { 
-                const state = await getAppState(chatId);
                 if (state.state === 'AWAITING_BOOKING_ACTION') {
                     await createPaymentOrder(chatId, state.data);
                 } else {
