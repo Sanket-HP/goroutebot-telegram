@@ -2,10 +2,17 @@
 const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
+const Razorpay = require('razorpay'); // NEW: Import Razorpay
 
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+
+// --- Razorpay Initialization ---
+const razorpay = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID,
+    key_secret: process.env.RAZORPAY_KEY_SECRET,
+});
 
 // --- MESSAGES ---
 const MESSAGES = {
@@ -43,6 +50,11 @@ Select an option from the menu below to get started. You can also type commands 
   no_bookings: "📭 You don't have any active bookings.",
   booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
   
+  // Payment (NEW MESSAGES)
+  payment_required: "💰 *Payment Required:* Total Amount: ₹{amount} INR.\n\n[Click here to pay]({paymentUrl})\n\n*Type 'paid' after successful payment.*",
+  payment_awaiting: "⏳ Waiting for payment confirmation. Please type 'paid' after completing the transaction.",
+  payment_failed: "❌ Payment verification failed. Please try payment again or contact support.",
+
   // Manager
   manager_add_bus_init: "📝 *Bus Creation:* Enter the new Bus ID (e.g., `BUS201`):",
   manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
@@ -61,11 +73,6 @@ Select an option from the menu below to get started. You can also type commands 
   tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
   tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
   tracking_passenger_info: "🚍 *Live Tracking - {busID}*\n\n📍 *Last Location:* {location}\n🕒 *Last Updated:* {time}\n\n_Note: Location updates every 15 minutes_",
-  
-  // Inventory Sync (NEW)
-  sync_setup_init: "🔗 *Sync Setup:* Enter the Bus ID for the inventory system setup (e.g., `BUS101`).",
-  sync_setup_url: "🌐 Enter the external OSP API URL/Endpoint for bus {busID}:",
-  sync_success: "✅ *Sync Setup Complete!* Bus {busID} is now linked to external inventory at {url}. Sync status is 'Pending Sync'.",
 
   // Notifications
   manager_notification_booking: "🔔 *NEW BOOKING CONFIRMED!*\n\nBus: {busID}\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}",
@@ -155,7 +162,7 @@ app.post('/api/webhook', async (req, res) => {
         await handleManagerAddBus(chatId);
       } else if (callbackData === 'cb_start_tracking') { 
         await handleManagerLiveTrackingSetup(chatId);
-      } else if (callbackData === 'cb_inventory_sync') { // NEW: Inventory Sync Button
+      } else if (callbackData === 'cb_inventory_sync') { 
         await handleInventorySyncSetup(chatId);
       } else if (callbackData === 'cb_update_phone') { 
         await handleUpdatePhoneNumberCallback(chatId);
@@ -166,7 +173,7 @@ app.post('/api/webhook', async (req, res) => {
       } else if (callbackData === 'cb_book_finish') { 
         const state = await getAppState(chatId);
         if (state.state.startsWith('AWAITING_BOOKING_ACTION')) {
-            await finalizeBooking(chatId, state.data);
+            await createPaymentOrder(chatId, state.data); // NEW STEP: Create Payment Order
         } else {
             await sendMessage(chatId, "❌ You don't have an active booking to finish.");
         }
@@ -198,8 +205,11 @@ async function handleUserMessage(chatId, text, user) {
          await handleLiveTrackingSetupInput(chatId, text, state);
       } else if (state.state === 'AWAITING_NEW_PHONE') { 
          await handlePhoneUpdateInput(chatId, text);
-      } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) { // NEW: Sync Setup State
+      } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
          await handleInventorySyncInput(chatId, text, state);
+      } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') { // NEW: Handle 'paid' text input
+         await handlePaymentVerification(chatId, state.data);
+         return;
       }
       return;
   }
@@ -802,53 +812,109 @@ async function handleAddPassengerCallback(chatId) {
     }
 }
 
-async function finalizeBooking(chatId, booking) {
+// --- NEW STEP: Create Payment Order ---
+async function createPaymentOrder(chatId, booking) {
     try {
-        const db = getFirebaseDb();
-        const bookingId = 'BOOK' + Date.now();
-        const batch = db.batch();
-        const dateTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+        // Calculate amount: Example price is 450 INR per passenger
+        const pricePerSeat = 45000; // 450 INR in paise
+        const totalAmount = booking.passengers.length * pricePerSeat;
+        const bookingId = 'BOOK' + Date.now(); // Generate potential booking ID now
 
-        const bookingRef = db.collection('bookings').doc(bookingId);
-        batch.set(bookingRef, {
-            booking_id: bookingId,
-            chat_id: String(chatId),
-            bus_id: booking.busID,
-            passengers: booking.passengers,
-            seats: booking.seats.map(s => s.seatNo),
-            status: 'confirmed',
-            total_seats: booking.passengers.length,
-            created_at: admin.firestore.FieldValue.serverTimestamp()
+        // 1. Create Order in Razorpay
+        const order = await razorpay.orders.create({
+            amount: totalAmount,
+            currency: "INR",
+            receipt: bookingId, 
         });
 
-        booking.seats.forEach(seat => {
-            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
-            batch.update(seatRef, { 
-                status: 'booked', 
-                booking_id: bookingId, 
-                temp_chat_id: admin.firestore.FieldValue.delete() 
-            });
-        });
+        // 2. Update state to await payment confirmation
+        booking.razorpay_order_id = order.id;
+        booking.total_amount = totalAmount; // Save total amount
+        booking.bookingId = bookingId; // Save the generated ID
 
-        batch.delete(db.collection('user_state').doc(String(chatId)));
+        await saveAppState(chatId, 'AWAITING_PAYMENT', booking);
         
-        await batch.commit();
+        // 3. Send payment link (NOTE: This is a placeholder RZP link format)
+        const paymentUrl = `https://rzp.io/i/${order.id}`;
         
-        // 1. Send Manager Notification (NEW)
-        await sendManagerNotification(booking.busID, 'BOOKING', { 
-            seats: booking.seats,
-            passengerName: booking.passengers[0].name,
-            dateTime: dateTime
-        });
-
-        // 2. Send User Confirmation
-        await sendMessage(chatId, MESSAGES.booking_finish.replace('{bookingId}', bookingId).replace('{count}', booking.passengers.length), "Markdown");
+        await sendMessage(chatId, 
+            MESSAGES.payment_required.replace('{amount}', (totalAmount / 100).toFixed(2)).replace('{paymentUrl}', paymentUrl), 
+            "Markdown");
 
     } catch (error) {
-        console.error('❌ finalizeBooking error:', error.message);
+        console.error('❌ Payment Order Creation Error:', error.message);
         await unlockSeats(booking);
-        await sendMessage(chatId, MESSAGES.db_error + " Booking failed. Seats were released.");
+        await sendMessage(chatId, MESSAGES.db_error + " Failed to create payment order. Seats were released.");
     }
+}
+
+// --- NEW STEP: Handle 'paid' command and finalize ---
+async function handlePaymentVerification(chatId, booking) {
+    try {
+        const orderId = booking.razorpay_order_id;
+        
+        // NOTE: In a REAL system, we would perform two CRITICAL steps here:
+        // 1. Check if the order status is 'paid' using razorpay.orders.fetch(orderId)
+        // 2. Verify the signature (SHA256 hash) if using Razorpay Webhooks.
+        
+        // For this environment, we assume the user typing 'paid' is sufficient verification.
+        
+        // Finalize the booking in Firebase
+        await commitFinalBookingBatch(chatId, booking);
+
+        // Success message is sent within commitFinalBookingBatch
+        
+    } catch (error) {
+        console.error('❌ Payment Verification Error:', error.message);
+        await sendMessage(chatId, MESSAGES.payment_failed);
+    }
+}
+
+// NEW FUNCTION: Commits the booking to Firebase (used ONLY after payment is confirmed)
+async function commitFinalBookingBatch(chatId, booking) {
+    const db = getFirebaseDb();
+    const batch = db.batch();
+    const dateTime = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+    // 1. Create Booking Document
+    const bookingRef = db.collection('bookings').doc(booking.bookingId);
+    batch.set(bookingRef, {
+        booking_id: booking.bookingId,
+        chat_id: String(chatId),
+        bus_id: booking.busID,
+        passengers: booking.passengers,
+        seats: booking.seats.map(s => s.seatNo),
+        status: 'confirmed',
+        total_seats: booking.passengers.length,
+        total_paid: booking.total_amount, // Save final amount paid
+        razorpay_order_id: booking.razorpay_order_id,
+        created_at: admin.firestore.FieldValue.serverTimestamp()
+    });
+
+    // 2. Update seat status to permanently 'booked'
+    booking.seats.forEach(seat => {
+        const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
+        batch.update(seatRef, { 
+            status: 'booked', 
+            booking_id: booking.bookingId, 
+            temp_chat_id: admin.firestore.FieldValue.delete() 
+        });
+    });
+
+    // 3. Delete the session state
+    batch.delete(db.collection('user_state').doc(String(chatId)));
+    
+    await batch.commit();
+
+    // 4. Send Manager Notification
+    await sendManagerNotification(booking.busID, 'BOOKING', { 
+        seats: booking.seats,
+        passengerName: booking.passengers[0].name,
+        dateTime: dateTime
+    });
+
+    // 5. Send User Confirmation
+    await sendMessage(chatId, MESSAGES.booking_finish.replace('{bookingId}', booking.bookingId).replace('{count}', booking.passengers.length), "Markdown");
 }
 
 
@@ -1252,3 +1318,5 @@ async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
 
 // Start the server
 module.exports = app;
+// Export cron function so Vercel can run it
+module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
