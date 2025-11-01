@@ -3,12 +3,12 @@ const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
 const Razorpay = require('razorpay'); 
-const crypto = require('crypto'); // FIX: Added missing crypto import
+const crypto = require('crypto');
 
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
-const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET; // Needed for webhook verification
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 // --- Razorpay Initialization ---
 const razorpay = new Razorpay({
@@ -16,7 +16,7 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_KEY_SECRET,
 });
 
-// --- MESSAGES (FIXED: Added missing constants) ---
+// --- MESSAGES ---
 const MESSAGES = {
     help: `🆘 *GoRoute Help Center*
 
@@ -52,7 +52,7 @@ Select an option from the menu below to get started. You can also type commands 
     no_bookings: "📭 You don't have any active bookings.",
     booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
     
-    // Payment (NEW MESSAGES)
+    // Payment
     payment_required: "💰 *Payment Required:* Total Amount: ₹{amount} INR.\n\n*Order ID: {orderId}*\n\n[Click here to pay]({paymentUrl})\n\n*(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)*",
     payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).",
     payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
@@ -132,108 +132,204 @@ function getFirebaseDb() {
     }
 }
 
-/* --------------------- Main Webhook Handler ---------------------- */
+/* --------------------- Telegram Axios Helpers ---------------------- */
 
-app.post('/api/webhook', async (req, res) => {
-    const update = req.body;
-    
-    try {
-        if (update.message && update.message.text) {
-            const message = update.message;
-            const chatId = message.chat.id;
-            const text = message.text ? message.text.trim() : '';
-            const user = message.from;
-            
-            await sendChatAction(chatId, "typing");
-            await handleUserMessage(chatId, text, user);
-        
-        } else if (update.callback_query) {
-            const callback = update.callback_query;
-            const chatId = callback.message.chat.id;
-            const callbackData = callback.data;
-            const messageId = callback.message.message_id;
-            
-            await answerCallbackQuery(callback.id);
-            await editMessageReplyMarkup(chatId, messageId, null);
-
-            await sendChatAction(chatId, "typing");
-
-            // --- ROUTE CALLBACKS ---
-            if (callbackData.startsWith('cb_register_role_')) {
-                await handleRoleSelection(chatId, callback.from, callbackData);
-            } else if (callbackData === 'cb_book_bus') {
-                await handleBusSearch(chatId);
-            } else if (callbackData === 'cb_booking_single') {
-                await showAvailableBuses(chatId);
-            } else if (callbackData === 'cb_my_booking') {
-                await handleBookingInfo(chatId);
-            } else if (callbackData === 'cb_my_profile') {
-                await handleUserProfile(chatId);
-            } else if (callbackData === 'cb_add_bus_manager') {
-                await handleManagerAddBus(chatId);
-            } else if (callbackData === 'cb_start_tracking') { 
-                await sendMessage(chatId, MESSAGES.feature_wip);
-            } else if (callbackData === 'cb_inventory_sync') { 
-                await handleInventorySyncSetup(chatId);
-            } else if (callbackData === 'cb_update_phone') { 
-                await handleUpdatePhoneNumberCallback(chatId);
-            } else if (callbackData.startsWith('cb_select_gender_')) { 
-                await handleGenderSelectionCallback(chatId, callbackData);
-            } else if (callbackData === 'cb_add_passenger') { 
-                await handleAddPassengerCallback(chatId);
-            } else if (callbackData === 'cb_book_finish') { 
-                const state = await getAppState(chatId);
-                if (state.state === 'AWAITING_BOOKING_ACTION') {
-                    await createPaymentOrder(chatId, state.data);
-                } else {
-                    await sendMessage(chatId, "❌ You don't have an active booking to finish.");
-                }
-            } else if (callbackData === 'cb_help' || callbackData === 'cb_status') {
-                await sendHelpMessage(chatId);
-            } else if (callbackData === 'cb_booking_couple' || callbackData === 'cb_booking_family') {
-                await sendMessage(chatId, MESSAGES.feature_wip);
-            }
-        }
-    } catch (error) {
-        console.error("Error in main handler:", error.message);
-    }
-
-    res.status(200).send('OK');
-});
-
-// --- NEW RAZORPAY WEBHOOK ENDPOINT ---
-app.post('/api/razorpay/webhook', async (req, res) => {
-    const signature = req.headers['x-razorpay-signature'];
-    const payload = req.rawBody; 
-
-    res.status(200).send('OK');
-
-    if (RAZORPAY_WEBHOOK_SECRET && !verifyRazorpaySignature(payload, signature)) {
-        console.error("WEBHOOK ERROR: Signature verification failed. Ignoring update.");
+async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
+    if (!TELEGRAM_TOKEN) {
+        console.error("❌ CRITICAL: TELEGRAM_TOKEN environment variable is missing. Cannot send message.");
         return; 
     }
-
-    const event = req.body.event;
-    
-    if (event === 'payment.failed' || event === 'order.paid') {
-        const orderId = req.body.payload.order.entity.id;
-        const db = getFirebaseDb();
-        
-        const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
-
-        if (sessionDoc.exists) {
-            const bookingData = sessionDoc.data().booking;
-            
-            if (event === 'order.paid') {
-                await commitFinalBookingBatch(bookingData.chat_id, bookingData); 
-            } else if (event === 'payment.failed') {
-                await unlockSeats(bookingData);
-                await db.collection('payment_sessions').doc(orderId).delete();
-                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
+    try {
+        const payload = { chat_id: chatId, text: text, parse_mode: parseMode };
+        if (replyMarkup) payload.reply_markup = replyMarkup;
+        await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+    } catch (error) {
+        if (error.response) {
+            console.error(`❌ TELEGRAM API ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
+            if (error.response.data.description && error.response.data.description.includes('bot was blocked by the user')) {
+                console.error(`--- FATAL: User ${chatId} has blocked the bot. Cannot send messages. ---`);
             }
+        } else if (error.request) {
+            console.error(`❌ TELEGRAM NETWORK ERROR for ${chatId}: No response received. Message: ${error.message}`);
+        } else {
+            console.error(`❌ TELEGRAM SETUP ERROR for ${chatId}: ${error.message}`);
         }
     }
-});
+}
+
+async function sendChatAction(chatId, action) {
+    try {
+        await axios.post(`${TELEGRAM_API}/sendChatAction`, { chat_id: chatId, action: action });
+    } catch (error) {
+        if (error.response) {
+            console.error(`❌ CRITICAL TELEGRAM ACTION ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
+        } else {
+            console.error(`❌ CRITICAL TELEGRAM ACTION NETWORK ERROR for ${chatId}: ${error.message}`);
+        }
+    }
+}
+
+async function answerCallbackQuery(callbackQueryId) {
+    try {
+        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackQueryId });
+    } catch (error) {
+        // Suppress minor errors
+    }
+}
+
+async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
+    try {
+        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+            chat_id: chatId,
+            message_id: messageId,
+            reply_markup: replyMarkup
+        });
+    } catch (error) {
+        // Suppress "message is not modified" errors
+    }
+}
+
+/* --------------------- Shared Helper Functions ---------------------- */
+
+async function getAppState(chatId) {
+    const db = getFirebaseDb();
+    const doc = await db.collection('user_state').doc(String(chatId)).get();
+    if (doc.exists) return { state: doc.data().state, data: doc.data().data };
+    return { state: 'IDLE', data: {} };
+}
+
+async function saveAppState(chatId, stateName, data) {
+    const db = getFirebaseDb();
+    await db.collection('user_state').doc(String(chatId)).set({
+        state: stateName,
+        data: data,
+        updated_at: admin.firestore.FieldValue.serverTimestamp()
+    });
+}
+
+async function unlockSeats(booking) {
+    try {
+        const db = getFirebaseDb();
+        const batch = db.batch();
+        booking.seats.forEach(seat => {
+            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
+            batch.update(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+        });
+        await batch.commit();
+    } catch (e) {
+        console.error("CRITICAL: Failed to unlock seats:", e.message);
+    }
+}
+
+async function getBusInfo(busID) {
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('buses').where('bus_id', '==', busID).limit(1).get();
+        if (snapshot.empty) return null;
+        
+        const data = snapshot.docs[0].data();
+        return {
+            busID: data.bus_id,
+            from: data.from,
+            to: data.to,
+            date: data.departure_time.split(' ')[0],
+            time: data.departure_time.split(' ')[1]
+        };
+    } catch (e) {
+        console.error("Error fetching bus info:", e.message);
+        return null;
+    }
+}
+
+async function sendManagerNotification(busID, type, details) {
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        
+        if (!busDoc.exists || !busDoc.data().tracking_manager_id) return; 
+
+        const managerChatId = busDoc.data().tracking_manager_id;
+        const now = details.dateTime;
+
+        let notificationText = '';
+        if (type === 'BOOKING') {
+            const seatList = details.seats.map(s => s.seatNo).join(', ');
+            notificationText = MESSAGES.manager_notification_booking
+                .replace('{busID}', busID)
+                .replace('{seats}', seatList)
+                .replace('{passengerName}', details.passengerName)
+                .replace('{dateTime}', now);
+        } else if (type === 'CANCELLATION') {
+            const seatsList = details.seats.join(', ');
+            notificationText = MESSAGES.manager_notification_cancellation
+                .replace('{bookingId}', details.bookingId)
+                .replace('{busID}', busID)
+                .replace('{seats}', seatsList)
+                .replace('{dateTime}', now);
+        }
+
+        if (notificationText) {
+            await sendMessage(managerChatId, notificationText, "Markdown");
+        }
+    } catch (e) {
+        console.error("Error sending manager notification:", e.message);
+    }
+}
+
+/* --------------------- Live Tracking Cron Logic ---------------------- */
+
+// This function is executed by the external Vercel Cron Job
+async function sendLiveLocationUpdates() {
+    const db = getFirebaseDb();
+    const updates = [];
+    let updatesSent = 0;
+
+    try {
+        // Find all buses that have a manager assigned (meaning tracking is enabled)
+        const busesSnapshot = await db.collection('buses').where('tracking_manager_id', '!=', null).get();
+
+        const currentTime = new Date();
+        const notificationTime = currentTime.toLocaleTimeString('en-IN');
+        const mockLocation = ["New Delhi Station", "Mumbai Central", "Pune Junction", "Jaipur Highway", "Bus is en route"];
+        
+        // Loop through all active tracking buses
+        busesSnapshot.forEach(busDoc => {
+            const data = busDoc.data();
+            const busID = data.bus_id;
+            const managerId = data.tracking_manager_id;
+            
+            // Generate a random mock location
+            const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
+
+            // Update the bus document with a new, mock location and time
+            busDoc.ref.update({
+                last_location_time: admin.firestore.FieldValue.serverTimestamp(),
+                last_location_name: randomLocation
+            });
+
+            // 1. Notify the Manager (as proof the cron job ran)
+            const managerNotification = MESSAGES.tracking_passenger_info
+                .replace('{busID}', busID)
+                .replace('{location}', randomLocation)
+                .replace('{time}', notificationTime);
+            
+            updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "Markdown"));
+            updatesSent++;
+
+            // 2. NOTE: In a production system, you would query the 'bookings' collection here
+            // to find and notify every passenger of this bus.
+        });
+
+        await Promise.all(updates);
+        return { updatesSent };
+
+    } catch (error) {
+        console.error("CRON JOB FAILED during update loop:", error.message);
+        throw error;
+    }
+}
+
+/* --------------------- Razorpay Webhook Verification ---------------------- */
 
 /**
  * Helper function to verify Razorpay signature using HMAC-SHA256.
@@ -250,68 +346,7 @@ function verifyRazorpaySignature(payload, signature) {
     return expectedSignature === signature;
 }
 
-/* --------------------- Message Router ---------------------- */
-
-async function handleUserMessage(chatId, text, user) {
-    const textLower = text.toLowerCase().trim();
-
-    // --- STATE MANAGEMENT CHECK (Highest Priority) ---
-    const state = await getAppState(chatId);
-    if (state.state !== 'IDLE') {
-        if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
-            await handleBookingInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
-            await handleManagerInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
-            await sendMessage(chatId, MESSAGES.feature_wip);
-        } else if (state.state === 'AWAITING_NEW_PHONE') { 
-            await handlePhoneUpdateInput(chatId, text);
-        } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
-            await handleInventorySyncInput(chatId, text, state);
-        } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') {
-            await handlePaymentVerification(chatId, state.data);
-            return;
-        }
-        return;
-    }
-
-    // --- STANDARD COMMANDS ---
-    if (textLower === '/start') {
-        await startUserRegistration(chatId, user);
-    }
-    else if (textLower.startsWith('my profile details')) {
-        await handleProfileUpdate(chatId, text);
-    }
-    else if (textLower === 'book bus' || textLower === '/book') {
-        await handleBusSearch(chatId);
-    }
-    else if (textLower.startsWith('show seats')) {
-        await handleSeatMap(chatId, text);
-    }
-    else if (textLower.startsWith('book seat')) {
-        await handleSeatSelection(chatId, text);
-    }
-    else if (textLower.startsWith('cancel booking')) {
-        await handleCancellation(chatId, text);
-    }
-    else if (textLower.startsWith('my profile') || textLower === '/profile') {
-        await handleUserProfile(chatId);
-    }
-    else if (textLower.startsWith('add seats')) {
-        await handleAddSeatsCommand(chatId, text);
-    }
-    else if (textLower.startsWith('live tracking')) { 
-        await sendMessage(chatId, MESSAGES.feature_wip);
-    }
-    else if (textLower === 'help' || textLower === '/help') {
-        await sendHelpMessage(chatId);
-    }
-    else { 
-        await sendMessage(chatId, MESSAGES.unknown_command, "Markdown");
-    }
-}
-
-/* --------------------- CORE HANDLERS ---------------------- */
+/* --------------------- Core Handlers ---------------------- */
 
 async function getUserRole(chatId) {
     try {
@@ -1202,149 +1237,178 @@ async function handleInventorySyncInput(chatId, text, state) {
     }
 }
 
-/* --------------------- Shared Helper Functions ---------------------- */
+/* --------------------- Message Router ---------------------- */
 
-async function getAppState(chatId) {
-    const db = getFirebaseDb();
-    const doc = await db.collection('user_state').doc(String(chatId)).get();
-    if (doc.exists) return { state: doc.data().state, data: doc.data().data };
-    return { state: 'IDLE', data: {} };
-}
+async function handleUserMessage(chatId, text, user) {
+    const textLower = text.toLowerCase().trim();
 
-async function saveAppState(chatId, stateName, data) {
-    const db = getFirebaseDb();
-    await db.collection('user_state').doc(String(chatId)).set({
-        state: stateName,
-        data: data,
-        updated_at: admin.firestore.FieldValue.serverTimestamp()
-    });
-}
-
-async function unlockSeats(booking) {
-    try {
-        const db = getFirebaseDb();
-        const batch = db.batch();
-        booking.seats.forEach(seat => {
-            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
-            batch.update(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
-        });
-        await batch.commit();
-    } catch (e) {
-        console.error("CRITICAL: Failed to unlock seats:", e.message);
-    }
-}
-
-async function getBusInfo(busID) {
-    try {
-        const db = getFirebaseDb();
-        const snapshot = await db.collection('buses').where('bus_id', '==', busID).limit(1).get();
-        if (snapshot.empty) return null;
-        
-        const data = snapshot.docs[0].data();
-        return {
-            busID: data.bus_id,
-            from: data.from,
-            to: data.to,
-            date: data.departure_time.split(' ')[0],
-            time: data.departure_time.split(' ')[1]
-        };
-    } catch (e) {
-        console.error("Error fetching bus info:", e.message);
-        return null;
-    }
-}
-
-async function sendManagerNotification(busID, type, details) {
-    try {
-        const db = getFirebaseDb();
-        const busDoc = await db.collection('buses').doc(busID).get();
-        
-        if (!busDoc.exists || !busDoc.data().tracking_manager_id) return; 
-
-        const managerChatId = busDoc.data().tracking_manager_id;
-        const now = details.dateTime;
-
-        let notificationText = '';
-        if (type === 'BOOKING') {
-            const seatList = details.seats.map(s => s.seatNo).join(', ');
-            notificationText = MESSAGES.manager_notification_booking
-                .replace('{busID}', busID)
-                .replace('{seats}', seatList)
-                .replace('{passengerName}', details.passengerName)
-                .replace('{dateTime}', now);
-        } else if (type === 'CANCELLATION') {
-            const seatsList = details.seats.join(', ');
-            notificationText = MESSAGES.manager_notification_cancellation
-                .replace('{bookingId}', details.bookingId)
-                .replace('{busID}', busID)
-                .replace('{seats}', seatsList)
-                .replace('{dateTime}', now);
+    // --- STATE MANAGEMENT CHECK (Highest Priority) ---
+    const state = await getAppState(chatId);
+    if (state.state !== 'IDLE') {
+        if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
+            await handleBookingInput(chatId, text, state);
+        } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
+            await handleManagerInput(chatId, text, state);
+        } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
+            await sendMessage(chatId, MESSAGES.feature_wip);
+        } else if (state.state === 'AWAITING_NEW_PHONE') { 
+            await handlePhoneUpdateInput(chatId, text);
+        } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
+            await handleInventorySyncInput(chatId, text, state);
+        } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') {
+            await handlePaymentVerification(chatId, state.data);
+            return;
         }
+        return;
+    }
 
-        if (notificationText) {
-            await sendMessage(managerChatId, notificationText, "Markdown");
-        }
-    } catch (e) {
-        console.error("Error sending manager notification:", e.message);
+    // --- STANDARD COMMANDS ---
+    if (textLower === '/start') {
+        await startUserRegistration(chatId, user);
+    }
+    else if (textLower.startsWith('my profile details')) {
+        await handleProfileUpdate(chatId, text);
+    }
+    else if (textLower === 'book bus' || textLower === '/book') {
+        await handleBusSearch(chatId);
+    }
+    else if (textLower.startsWith('show seats')) {
+        await handleSeatMap(chatId, text);
+    }
+    else if (textLower.startsWith('book seat')) {
+        await handleSeatSelection(chatId, text);
+    }
+    else if (textLower.startsWith('cancel booking')) {
+        await handleCancellation(chatId, text);
+    }
+    else if (textLower.startsWith('my profile') || textLower === '/profile') {
+        await handleUserProfile(chatId);
+    }
+    else if (textLower.startsWith('add seats')) {
+        await handleAddSeatsCommand(chatId, text);
+    }
+    else if (textLower.startsWith('live tracking')) { 
+        await sendMessage(chatId, MESSAGES.feature_wip);
+    }
+    else if (textLower === 'help' || textLower === '/help') {
+        await sendHelpMessage(chatId);
+    }
+    else { 
+        await sendMessage(chatId, MESSAGES.unknown_command, "Markdown");
     }
 }
 
-/* --------------------- Telegram Axios Helpers ---------------------- */
+/* --------------------- Main Webhook Handler ---------------------- */
 
-async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
-    if (!TELEGRAM_TOKEN) {
-        console.error("❌ CRITICAL: TELEGRAM_TOKEN environment variable is missing. Cannot send message.");
+app.post('/api/webhook', async (req, res) => {
+    const update = req.body;
+    
+    try {
+        if (update.message && update.message.text) {
+            const message = update.message;
+            const chatId = message.chat.id;
+            const text = message.text ? message.text.trim() : '';
+            const user = message.from;
+            
+            await sendChatAction(chatId, "typing");
+            await handleUserMessage(chatId, text, user);
+        
+        } else if (update.callback_query) {
+            const callback = update.callback_query;
+            const chatId = callback.message.chat.id;
+            const callbackData = callback.data;
+            const messageId = callback.message.message_id;
+            
+            await answerCallbackQuery(callback.id);
+            await editMessageReplyMarkup(chatId, messageId, null);
+
+            await sendChatAction(chatId, "typing");
+
+            // --- ROUTE CALLBACKS ---
+            if (callbackData.startsWith('cb_register_role_')) {
+                await handleRoleSelection(chatId, callback.from, callbackData);
+            } else if (callbackData === 'cb_book_bus') {
+                await handleBusSearch(chatId);
+            } else if (callbackData === 'cb_booking_single') {
+                await showAvailableBuses(chatId);
+            } else if (callbackData === 'cb_my_booking') {
+                await handleBookingInfo(chatId);
+            } else if (callbackData === 'cb_my_profile') {
+                await handleUserProfile(chatId);
+            } else if (callbackData === 'cb_add_bus_manager') {
+                await handleManagerAddBus(chatId);
+            } else if (callbackData === 'cb_start_tracking') { 
+                await sendMessage(chatId, MESSAGES.feature_wip);
+            } else if (callbackData === 'cb_inventory_sync') { 
+                await handleInventorySyncSetup(chatId);
+            } else if (callbackData === 'cb_update_phone') { 
+                await handleUpdatePhoneNumberCallback(chatId);
+            } else if (callbackData.startsWith('cb_select_gender_')) { 
+                await handleGenderSelectionCallback(chatId, callbackData);
+            } else if (callbackData === 'cb_add_passenger') { 
+                await handleAddPassengerCallback(chatId);
+            } else if (callbackData === 'cb_book_finish') { 
+                const state = await getAppState(chatId);
+                if (state.state === 'AWAITING_BOOKING_ACTION') {
+                    await createPaymentOrder(chatId, state.data);
+                } else {
+                    await sendMessage(chatId, "❌ You don't have an active booking to finish.");
+                }
+            } else if (callbackData === 'cb_help' || callbackData === 'cb_status') {
+                await sendHelpMessage(chatId);
+            } else if (callbackData === 'cb_booking_couple' || callbackData === 'cb_booking_family') {
+                await sendMessage(chatId, MESSAGES.feature_wip);
+            }
+        }
+    } catch (error) {
+        console.error("Error in main handler:", error.message);
+    }
+
+    res.status(200).send('OK');
+});
+
+// --- NEW RAZORPAY WEBHOOK ENDPOINT ---
+app.post('/api/razorpay/webhook', async (req, res) => {
+    const signature = req.headers['x-razorpay-signature'];
+    const payload = req.rawBody; 
+
+    res.status(200).send('OK');
+
+    if (RAZORPAY_WEBHOOK_SECRET && !verifyRazorpaySignature(payload, signature)) {
+        console.error("WEBHOOK ERROR: Signature verification failed. Ignoring update.");
         return; 
     }
-    try {
-        const payload = { chat_id: chatId, text: text, parse_mode: parseMode };
-        if (replyMarkup) payload.reply_markup = replyMarkup;
-        await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
-    } catch (error) {
-        if (error.response) {
-            console.error(`❌ TELEGRAM API ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
-            if (error.response.data.description && error.response.data.description.includes('bot was blocked by the user')) {
-                console.error(`--- FATAL: User ${chatId} has blocked the bot. Cannot send messages. ---`);
+
+    const event = req.body.event;
+    
+    if (event === 'payment.failed' || event === 'order.paid') {
+        const orderId = req.body.payload.order.entity.id;
+        const db = getFirebaseDb();
+        
+        const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
+
+        if (sessionDoc.exists) {
+            const bookingData = sessionDoc.data().booking;
+            
+            if (event === 'order.paid') {
+                await commitFinalBookingBatch(bookingData.chat_id, bookingData); 
+            } else if (event === 'payment.failed') {
+                await unlockSeats(bookingData);
+                await db.collection('payment_sessions').doc(orderId).delete();
+                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
             }
-        } else if (error.request) {
-            console.error(`❌ TELEGRAM NETWORK ERROR for ${chatId}: No response received. Message: ${error.message}`);
-        } else {
-            console.error(`❌ TELEGRAM SETUP ERROR for ${chatId}: ${error.message}`);
         }
     }
-}
+});
 
-async function sendChatAction(chatId, action) {
-    try {
-        await axios.post(`${TELEGRAM_API}/sendChatAction`, { chat_id: chatId, action: action });
-    } catch (error) {
-        if (error.response) {
-            console.error(`❌ CRITICAL TELEGRAM ACTION ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
-        } else {
-            console.error(`❌ CRITICAL TELEGRAM ACTION NETWORK ERROR for ${chatId}: ${error.message}`);
-        }
-    }
-}
-
-async function answerCallbackQuery(callbackQueryId) {
-    try {
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackQueryId });
-    } catch (error) {
-        // Suppress minor errors
-    }
-}
-
-async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
-    try {
-        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
-            chat_id: chatId,
-            message_id: messageId,
-            reply_markup: replyMarkup
-        });
-    } catch (error) {
-        // Suppress "message is not modified" errors
-    }
-}
+// Add a simple health check endpoint
+app.get('/', (req, res) => {
+    res.status(200).json({ 
+        status: 'OK', 
+        message: 'GoRoute Telegram Bot is running',
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Start the server
 module.exports = app;
