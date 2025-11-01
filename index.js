@@ -101,6 +101,7 @@ function getFirebaseDb() {
     // --- SAFETY CHECK ---
     const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
     if (!rawCredsBase64) {
+      // This is the CRITICAL ERROR handler. It throws, so the caller can send a message.
       throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
     }
     
@@ -173,7 +174,7 @@ app.post('/api/webhook', async (req, res) => {
       } else if (callbackData === 'cb_book_finish') { 
         const state = await getAppState(chatId);
         if (state.state.startsWith('AWAITING_BOOKING_ACTION')) {
-            await createPaymentOrder(chatId, state.data); // NEW STEP: Create Payment Order
+            await createPaymentOrder(chatId, state.data); // CORRECTED STEP
         } else {
             await sendMessage(chatId, "❌ You don't have an active booking to finish.");
         }
@@ -207,7 +208,7 @@ async function handleUserMessage(chatId, text, user) {
          await handlePhoneUpdateInput(chatId, text);
       } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
          await handleInventorySyncInput(chatId, text, state);
-      } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') { // NEW: Handle 'paid' text input
+      } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') { // Handle 'paid' text input
          await handlePaymentVerification(chatId, state.data);
          return;
       }
@@ -848,28 +849,6 @@ async function createPaymentOrder(chatId, booking) {
     }
 }
 
-// --- NEW STEP: Handle 'paid' command and finalize ---
-async function handlePaymentVerification(chatId, booking) {
-    try {
-        const orderId = booking.razorpay_order_id;
-        
-        // NOTE: In a REAL system, we would perform two CRITICAL steps here:
-        // 1. Check if the order status is 'paid' using razorpay.orders.fetch(orderId)
-        // 2. Verify the signature (SHA256 hash) if using Razorpay Webhooks.
-        
-        // For this environment, we assume the user typing 'paid' is sufficient verification.
-        
-        // Finalize the booking in Firebase
-        await commitFinalBookingBatch(chatId, booking);
-
-        // Success message is sent within commitFinalBookingBatch
-        
-    } catch (error) {
-        console.error('❌ Payment Verification Error:', error.message);
-        await sendMessage(chatId, MESSAGES.payment_failed);
-    }
-}
-
 // NEW FUNCTION: Commits the booking to Firebase (used ONLY after payment is confirmed)
 async function commitFinalBookingBatch(chatId, booking) {
     const db = getFirebaseDb();
@@ -915,6 +894,23 @@ async function commitFinalBookingBatch(chatId, booking) {
 
     // 5. Send User Confirmation
     await sendMessage(chatId, MESSAGES.booking_finish.replace('{bookingId}', booking.bookingId).replace('{count}', booking.passengers.length), "Markdown");
+}
+
+async function handlePaymentVerification(chatId, booking) {
+    try {
+        // NOTE: In a REAL system, we would perform two CRITICAL steps here:
+        // 1. Check if the order status is 'paid' using razorpay.orders.fetch(orderId)
+        // 2. Verify the signature (SHA256 hash) if using Razorpay Webhooks.
+        
+        // For this environment, we assume the user typing 'paid' is sufficient verification.
+        
+        // Finalize the booking in Firebase
+        await commitFinalBookingBatch(chatId, booking);
+        
+    } catch (error) {
+        console.error('❌ Payment Verification Error:', error.message);
+        await sendMessage(chatId, MESSAGES.payment_failed);
+    }
 }
 
 
