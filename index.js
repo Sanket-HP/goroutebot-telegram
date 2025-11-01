@@ -128,6 +128,7 @@ function getFirebaseDb() {
 
     } catch (e) {
         console.error("CRITICAL FIREBASE ERROR", e.message);
+        // Rethrow the error so the calling function can handle it gracefully.
         throw e; 
     }
 }
@@ -355,43 +356,50 @@ async function getUserRole(chatId) {
         if (doc.exists) return doc.data().role;
         return 'unregistered';
     } catch (e) {
-        return 'error';
+        // Critical DB failure
+        console.error('Error fetching user role, assuming error:', e.message);
+        return 'error'; 
     }
 }
 
 async function sendHelpMessage(chatId) {
-    const db = getFirebaseDb();
-    const userDoc = await db.collection('users').doc(String(chatId)).get();
-    const userRole = userDoc.exists ? userDoc.data().role : 'unregistered';
-    
-    let baseButtons = [];
+    try {
+        const db = getFirebaseDb();
+        const userDoc = await db.collection('users').doc(String(chatId)).get();
+        const userRole = userDoc.exists ? userDoc.data().role : 'unregistered';
+        
+        let baseButtons = [];
 
-    if (userRole === 'manager' || userRole === 'owner') {
-        baseButtons = [
-            [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
-            [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
-            [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
-        ];
-    } else {
-        baseButtons = [
-            [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
-            [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
-        ];
+        if (userRole === 'manager' || userRole === 'owner') {
+            baseButtons = [
+                [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+                [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
+                [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
+            ];
+        } else {
+            baseButtons = [
+                [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
+                [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
+            ];
+        }
+        
+        let finalButtons = baseButtons;
+        
+        if (userDoc.exists) {
+            finalButtons.push([{ text: "📞 Update Phone", callback_data: "cb_update_phone" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }]);
+        } else {
+            finalButtons.push([{ text: "👤 My Profile", callback_data: "cb_my_profile" }]);
+        }
+        
+        finalButtons.push([{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]);
+
+        const keyboard = { inline_keyboard: finalButtons };
+
+        await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
+    } catch (e) {
+        // Fallback if DB fails during help message construction
+        await sendMessage(chatId, "❌ Database error when loading help menu. Please check DB connection.");
     }
-    
-    let finalButtons = baseButtons;
-    
-    if (userDoc.exists) {
-        finalButtons.push([{ text: "📞 Update Phone", callback_data: "cb_update_phone" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }]);
-    } else {
-        finalButtons.push([{ text: "👤 My Profile", callback_data: "cb_my_profile" }]);
-    }
-    
-    finalButtons.push([{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]);
-
-    const keyboard = { inline_keyboard: finalButtons };
-
-    await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
 }
 
 /* --------------------- General Handlers ---------------------- */
@@ -402,8 +410,12 @@ async function handleUpdatePhoneNumberCallback(chatId) {
         return await sendMessage(chatId, "❌ You must register first to update your profile. Send /start.");
     }
     
-    await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
-    await sendMessage(chatId, MESSAGES.update_phone_prompt, "Markdown");
+    try {
+        await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
+        await sendMessage(chatId, MESSAGES.update_phone_prompt, "Markdown");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error + " Could not initiate phone update.");
+    }
 }
 
 async function handlePhoneUpdateInput(chatId, text) {
@@ -518,7 +530,8 @@ async function handleCancellation(chatId, text) {
 
 async function startUserRegistration(chatId, user) {
     try {
-        const db = getFirebaseDb();
+        const db = getFirebaseDb(); // Try to get DB
+        
         const doc = await db.collection('users').doc(String(chatId)).get();
 
         if (doc.exists) {
@@ -537,8 +550,8 @@ async function startUserRegistration(chatId, user) {
         }
     } catch (error) {
         console.error(`❌ /start error for ${chatId}:`, error.message);
-        // If Firebase/DB error, inform the user
-        await sendMessage(chatId, MESSAGES.db_error);
+        // If DB fails here, the user receives the generic DB error.
+        await sendMessage(chatId, MESSAGES.db_error + " (Check FIREBASE_CREDS_BASE64)");
     }
 }
 
@@ -1244,7 +1257,15 @@ async function handleUserMessage(chatId, text, user) {
     const textLower = text.toLowerCase().trim();
 
     // --- STATE MANAGEMENT CHECK (Highest Priority) ---
-    const state = await getAppState(chatId);
+    let state;
+    try {
+        state = await getAppState(chatId);
+    } catch (e) {
+        // This means DB failed during state fetch.
+        await sendMessage(chatId, MESSAGES.db_error + " (State check failed)");
+        return;
+    }
+
     if (state.state !== 'IDLE') {
         if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
             await handleBookingInput(chatId, text, state);
@@ -1303,25 +1324,21 @@ async function handleUserMessage(chatId, text, user) {
 
 app.post('/api/webhook', async (req, res) => {
     const update = req.body;
-
-    // --- CRITICAL INITIALIZATION & TOKEN CHECK (ADDED) ---
-    // This is crucial to diagnose the "no response" issue. If the token is missing, 
-    // the bot will fail silently when trying to send messages.
-    if (!TELEGRAM_TOKEN) {
-        console.error("❌ CRITICAL: TELEGRAM_TOKEN is missing. Bot cannot respond. Please set the environment variable.");
-        // We must still return 200 OK to prevent Telegram from infinitely retrying.
-        return res.status(200).send('OK (Token Missing)'); 
-    }
-    
-    // Check Firebase Initialization immediately (if it hasn't been done yet)
-    try {
-        getFirebaseDb();
-    } catch (e) {
-        console.error("CRITICAL FIREBASE INITIALIZATION ERROR on webhook call:", e.message);
-        // We proceed, but the internal logic that needs the DB will catch the error and try to notify the user.
-    }
-    // --- END CRITICAL INITIALIZATION CHECK ---
-
+    
+    // --- CRITICAL INITIALIZATION CHECK ---
+    // This ensures that if the DB fails to initialize (e.g., bad creds), 
+    // we can still send a message back to the user.
+    try {
+        getFirebaseDb();
+    } catch (e) {
+        console.error("CRITICAL FIREBASE INITIALIZATION ERROR on webhook call:", e.message);
+        if (update.message) {
+            // Attempt to send a message using the raw token since DB is the issue
+            await sendMessage(update.message.chat.id, MESSAGES.db_error + ". FIX: Check 'FIREBASE_CREDS_BASE64' variable in Vercel.");
+        }
+        return res.status(500).send('Initialization Error'); 
+    }
+    
     try {
         if (update.message && update.message.text) {
             const message = update.message;
@@ -1329,7 +1346,8 @@ app.post('/api/webhook', async (req, res) => {
             const text = message.text ? message.text.trim() : '';
             const user = message.from;
             
-            await sendChatAction(chatId, "typing");
+            // The user sees the 'typing' indicator almost instantly
+            await sendChatAction(chatId, "typing"); 
             await handleUserMessage(chatId, text, user);
         
         } else if (update.callback_query) {
@@ -1381,6 +1399,11 @@ app.post('/api/webhook', async (req, res) => {
         }
     } catch (error) {
         console.error("Error in main handler:", error.message);
+        // Fallback error handler if something catastrophic happens in the flow
+        const chatId = update.message?.chat.id || update.callback_query?.message.chat.id;
+        if (chatId) {
+            await sendMessage(chatId, "❌ A critical application error occurred. Please try /start again.");
+        }
     }
 
     res.status(200).send('OK');
@@ -1390,6 +1413,12 @@ app.post('/api/webhook', async (req, res) => {
 app.post('/api/razorpay/webhook', async (req, res) => {
     const signature = req.headers['x-razorpay-signature'];
     const payload = req.rawBody; 
+
+    // Ensure DB is initialized for webhook processing
+    try { getFirebaseDb(); } catch (e) {
+        console.error("CRITICAL FIREBASE INITIALIZATION FAILED during Razorpay webhook.", e.message);
+        return res.status(500).send('DB Init Error');
+    }
 
     res.status(200).send('OK');
 
