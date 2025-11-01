@@ -374,8 +374,11 @@ async function getUserRole(chatId) {
 async function sendHelpMessage(chatId) {
     try {
         const db = getFirebaseDb();
+        console.log(`[HELP FLOW] User ${chatId}: Reading user role for button customization.`); // TRACE
         const userDoc = await db.collection('users').doc(String(chatId)).get();
+        console.log(`[HELP FLOW] User ${chatId}: User role document retrieved.`); // TRACE
         const userRole = userDoc.exists ? userDoc.data().role : 'unregistered';
+        console.log(`[HELP FLOW] User ${chatId}: Role determined as ${userRole}. Constructing keyboard.`); // TRACE
         
         let baseButtons = [];
 
@@ -404,6 +407,7 @@ async function sendHelpMessage(chatId) {
 
         const keyboard = { inline_keyboard: finalButtons };
 
+        console.log(`[HELP FLOW] User ${chatId}: Sending final help message.`); // TRACE
         await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
     } catch (e) {
         // Fallback if DB fails during help message construction
@@ -541,17 +545,21 @@ async function handleCancellation(chatId, text) {
 async function startUserRegistration(chatId, user) {
     try {
         const db = getFirebaseDb(); // Try to get DB
-        console.log(`[START FLOW] User ${chatId}: Attempting to read user document.`);
+        console.log(`[START FLOW] User ${chatId}: 1. DB obtained. Attempting to read user document.`); // TRACE
         
         const doc = await db.collection('users').doc(String(chatId)).get();
 
+        console.log(`[START FLOW] User ${chatId}: 2. User document fetched. Exists: ${doc.exists}`); // TRACE
+
         if (doc.exists) {
-           console.log(`[START FLOW] User ${chatId}: Found existing user. Sending welcome back.`);
+           console.log(`[START FLOW] User ${chatId}: 3. Found existing user. Preparing welcome back.`); // TRACE
            const userName = user.first_name || 'User'; 
            await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
+            console.log(`[START FLOW] User ${chatId}: 4. Welcome message sent. Calling sendHelpMessage.`); // TRACE
            await sendHelpMessage(chatId); 
+            console.log(`[START FLOW] User ${chatId}: 5. Help message completed.`); // TRACE
         } else {
-            console.log(`[START FLOW] User ${chatId}: New user. Sending role prompt.`);
+            console.log(`[START FLOW] User ${chatId}: 3. New user. Preparing role prompt.`); // TRACE
             const keyboard = {
                 inline_keyboard: [
                     [{ text: "👤 User (Book Tickets)", callback_data: "cb_register_role_user" }],
@@ -560,6 +568,7 @@ async function startUserRegistration(chatId, user) {
                 ]
             };
             await sendMessage(chatId, MESSAGES.prompt_role, "Markdown", keyboard);
+            console.log(`[START FLOW] User ${chatId}: 4. Role prompt sent. Registration flow complete.`); // TRACE
         }
     } catch (error) {
         console.error(`❌ CRITICAL /start error for ${chatId}:`, error.message);
@@ -839,34 +848,37 @@ async function handleGenderSelectionCallback(chatId, callbackData) {
     }
 }
 
+// ...existing code...
 async function handleBookingInput(chatId, text, state) {
-    const booking = state.data;
-    
-    if (state.state === 'AWAITING_PASSENGER_DETAILS') {
-        const passengerMatch = text.match(/([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
-        if (!passengerMatch) return await sendMessage(chatId, MESSAGES.booking_details_error, "Markdown");
+    try {
+        const booking = state.data;
+        
+        if (state.state === 'AWAITING_PASSENGER_DETAILS') {
+            const passengerMatch = text.match(/([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
+            if (!passengerMatch) return await sendMessage(chatId, MESSAGES.booking_details_error, "Markdown");
 
-        const name = passengerMatch[1].trim();
-        const age = passengerMatch[2].trim();
-        const aadhar = passengerMatch[3].trim();
-        
-        booking.passengers.push({ name, age, aadhar, gender: booking.gender, seat: booking.seatNo });
-        
-        await saveAppState(chatId, 'AWAITING_BOOKING_ACTION', booking);
-        
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: "➕ Add Another Passenger", callback_data: "cb_add_passenger" }],
-                [{ text: "✅ Complete Booking", callback_data: "cb_book_finish" }]
-            ]
-        };
-        await sendMessage(chatId, MESSAGES.booking_passenger_prompt.replace('{count}', booking.passengers.length).replace('{seatNo}', booking.seatNo), "Markdown", keyboard);
-        
-        return;
-    }
-    
-    await sendMessage(chatId, "Please use the provided buttons to continue (Add Another Passenger or Complete Booking).", "Markdown");
+            const name = passengerMatch[1].trim();
+            const age = passengerMatch[2].trim();
+            const aadhar = passengerMatch[3].trim();
+            
+            booking.passengers.push({ name, age, aadhar, gender: booking.gender, seat: booking.seatNo });
+            
+            await saveAppState(chatId, 'AWAITING_BOOKING_ACTION', booking);
+            
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: "➕ Add Another Passenger", callback_data: "cb_add_passenger" }],
+                    [{ text: "✅ Complete Booking", callback_data: "cb_book_finish" }]
+                ]
+            };
+            await sendMessage(chatId, MESSAGES.booking_passenger_prompt.replace('{count}', booking.passengers.length).replace('{seatNo}', booking.seatNo), "Markdown", keyboard);
+        }
+    } catch (error) {
+        console.error('❌ handleBookingInput error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
 }
+// ...existing code...
 
 async function handleAddPassengerCallback(chatId) {
     try {
@@ -1017,6 +1029,12 @@ async function handleManagerInput(chatId, text, state) {
                 data.busName = text;
                 nextState = 'MANAGER_ADD_BUS_ROUTE';
                 response = MESSAGES.manager_add_bus_route;
+                break;
+
+            case 'MANAGER_ADD_BUS_ROUTE':
+                data.route = text;
+                nextState = 'MANAGER_ADD_BUS_PRICE';
+                response = MESSAGES.manager_add_bus_price;
                 break;
 
             case 'MANAGER_ADD_BUS_PRICE':
@@ -1354,8 +1372,11 @@ app.post('/api/webhook', async (req, res) => {
             const user = message.from;
             
             // The user sees the 'typing' indicator almost instantly
+            console.log(`[TRACE] ${chatId}: Sending typing indicator.`); // TRACE
             await sendChatAction(chatId, "typing"); 
+            console.log(`[TRACE] ${chatId}: Typing indicator sent. Starting message handling.`); // TRACE
             await handleUserMessage(chatId, text, user);
+            console.log(`[TRACE] ${chatId}: Message handling finished successfully.`); // TRACE
         
         } else if (update.callback_query) {
             const callback = update.callback_query;
@@ -1413,6 +1434,7 @@ app.post('/api/webhook', async (req, res) => {
         }
     }
 
+    console.log(`[TRACE] Webhook handler finishing for update.`); // TRACE
     res.status(200).send('OK');
 });
 
