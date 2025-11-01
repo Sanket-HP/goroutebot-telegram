@@ -48,13 +48,12 @@ Select an option from the menu below to get started. You can also type commands 
     booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n<b>What's next?</b>",
     
     // Payment
-    // NOTE: booking_finish is replaced by payment_confirmed_ticket which is used in commitFinalBookingBatch
     payment_required: "💰 <b>Payment Required:</b> Total Amount: ₹{amount} INR.\n\n<b>Order ID: {orderId}</b>\n\n<a href='{paymentUrl}'>Click here to pay</a>\n\n<i>(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)</i>",
     payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).\n\nSelect an option below once payment is complete or if you wish to cancel.",
     payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
     session_cleared: "🧹 <b>Previous booking session cleared.</b> Your locked seats have been released.",
 
-    // New detailed confirmation
+    // Detailed Ticket Confirmation
     payment_confirmed_ticket: `✅ <b>Payment Confirmed & E-Ticket Issued!</b>
     
 🎫 <b>E-Ticket Details</b>
@@ -63,6 +62,7 @@ Route: {from} → {to}
 Date: {journeyDate}
 Departure: {departTime}
 Seats: {seatList}
+Boarding Points: {boardingPoints}
 
 👤 <b>Passenger Info (Primary)</b>
 Name: {name}
@@ -79,6 +79,17 @@ Time: {dateTime}
     no_bookings: "📭 You don't have any active bookings.",
     booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.", 
     
+    // NEW SEARCH MESSAGES
+    search_from: "🗺️ <b>Travel From:</b> Please select your source city:",
+    search_to: "➡️ <b>Travel To:</b> Please select your destination city:",
+    search_date: "📅 <b>Travel Date:</b> When do you plan to travel?",
+    search_results: "🚌 <b>Search Results ({from} to {to}, {date})</b> 🚌\n\n",
+    
+    // NEW MANIFEST MESSAGE
+    manifest_header: "📋 <b>Bus Manifest - {busID}</b>\nRoute: {from} → {to}\nDate: {date}\nTotal Booked Seats: {count}\n\n",
+    manifest_entry: " • <b>Seat {seat}:</b> {name} (Aadhar {aadhar}) {gender}",
+    no_manifest: "❌ No confirmed bookings found for bus {busID}.",
+
     // Manager
     manager_add_bus_init: "📝 <b>Bus Creation:</b> Enter the <b>Bus Number</b> (e.g., <pre>MH-12 AB 1234</pre>):",
     manager_add_bus_number: "🚌 Enter the <b>Bus Name</b> (e.g., <pre>Sharma Travels</pre>):",
@@ -90,6 +101,9 @@ Time: {dateTime}
     manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., <pre>08:30</pre>):",
     manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., <pre>18:00</pre>):",
     manager_add_bus_manager_phone: "📞 <b>Final Step:</b> Enter your Phone Number to associate with the bus:",
+    manager_add_bus_boarding_init: "📍 <b>Boarding Points:</b> Enter the points and times in the format:\n<pre>[Point Name] / [HH:MM]</pre>\n\nSend 'DONE' when finished (max 5 points):",
+    manager_add_bus_boarding_more: "✅ Point added. Add another (or send 'DONE'):",
+    manager_add_bus_boarding_invalid: "❌ Invalid format. Please use: <pre>[Point Name] / [HH:MM]</pre>",
     manager_bus_saved: "✅ <b>Bus {busID} created!</b> Route: {route}. Next, add seats: \n\n<b>Next Step:</b> Now, create all seats for this bus by typing:\n<pre>add seats {busID} 40</pre>",
     manager_seats_saved: "✅ <b>Seats Added!</b> 40 seats have been created for bus {busID} and marked available. You can now use <pre>show seats {busID}</pre>.",
     manager_seats_invalid: "❌ Invalid format. Please use: <pre>add seats [BUSID] [COUNT]</pre>",
@@ -246,8 +260,8 @@ async function unlockSeats(booking) {
         if (booking && booking.seats && Array.isArray(booking.seats)) {
              booking.seats.forEach(seat => {
                 const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
-                // Ensure to check if the seat exists before trying to delete the field.
-                batch.update(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+                // Use set with merge true to ensure fields are deleted even if document doesn't exist
+                batch.set(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() }, { merge: true });
             });
         }
         await batch.commit();
@@ -279,13 +293,12 @@ async function getBusInfo(busID) {
 async function sendManagerNotification(busID, type, details) {
     try {
         const db = getFirebaseDb();
-        // NOTE: In a real system, we would query the bus document by ID. 
-        // Assuming busID is the document ID for 'buses' collection.
-        const busDoc = await db.collection('buses').doc(busID).get();
+        // Use busID as the document ID for 'buses' collection (assuming this is the structure)
+        const busDoc = await db.collection('buses').doc(busID).get(); 
         
-        if (!busDoc.exists || !busDoc.data().tracking_manager_id) return; 
+        if (!busDoc.exists || !busDoc.data().manager_chat_id) return; 
 
-        const managerChatId = busDoc.data().tracking_manager_id;
+        const managerChatId = busDoc.data().manager_chat_id;
         const now = details.dateTime;
 
         let notificationText = '';
@@ -315,36 +328,30 @@ async function sendManagerNotification(busID, type, details) {
 
 /* --------------------- Live Tracking Cron Logic ---------------------- */
 
-// This function is executed by the external Vercel Cron Job
 async function sendLiveLocationUpdates() {
     const db = getFirebaseDb();
     const updates = [];
     let updatesSent = 0;
 
     try {
-        // Find all buses that have a manager assigned (meaning tracking is enabled)
-        const busesSnapshot = await db.collection('buses').where('tracking_manager_id', '!=', null).get();
+        const busesSnapshot = await db.collection('buses').where('manager_chat_id', '!=', null).get();
 
         const currentTime = new Date();
         const notificationTime = currentTime.toLocaleTimeString('en-IN');
         const mockLocation = ["New Delhi Station", "Mumbai Central", "Pune Junction", "Jaipur Highway", "Bus is en route"];
         
-        // Loop through all active tracking buses
         busesSnapshot.forEach(busDoc => {
             const data = busDoc.data();
             const busID = data.bus_id;
-            const managerId = data.tracking_manager_id;
+            const managerId = data.manager_chat_id;
             
-            // Generate a random mock location
             const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
 
-            // Update the bus document with a new, mock location and time
             busDoc.ref.update({
                 last_location_time: admin.firestore.FieldValue.serverTimestamp(),
                 last_location_name: randomLocation
             });
 
-            // 1. Notify the Manager (as proof the cron job ran)
             const managerNotification = MESSAGES.tracking_passenger_info
                 .replace('{busID}', busID)
                 .replace('{location}', randomLocation)
@@ -352,9 +359,6 @@ async function sendLiveLocationUpdates() {
             
             updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "HTML"));
             updatesSent++;
-
-            // 2. NOTE: In a production system, you would query the 'bookings' collection here
-            // to find and notify every passenger of this bus.
         });
 
         await Promise.all(updates);
@@ -368,9 +372,6 @@ async function sendLiveLocationUpdates() {
 
 /* --------------------- Razorpay Webhook Verification ---------------------- */
 
-/**
- * Helper function to verify Razorpay signature using HMAC-SHA256.
- */
 function verifyRazorpaySignature(payload, signature) {
     if (!RAZORPAY_WEBHOOK_SECRET) {
         console.warn("RAZORPAY_WEBHOOK_SECRET is not set. Skipping signature verification.");
@@ -392,7 +393,6 @@ async function getUserRole(chatId) {
         if (doc.exists) return doc.data().role;
         return 'unregistered';
     } catch (e) {
-        // Critical DB failure
         console.error('Error fetching user role, assuming error:', e.message);
         return 'error'; 
     }
@@ -409,6 +409,7 @@ async function sendHelpMessage(chatId) {
         if (userRole === 'manager' || userRole === 'owner') {
             baseButtons = [
                 [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+                [{ text: "📋 Show Manifest", callback_data: "cb_show_manifest_prompt" }],
                 [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
                 [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
             ];
@@ -421,7 +422,6 @@ async function sendHelpMessage(chatId) {
         
         let finalButtons = baseButtons;
         
-        // Ensure buttons are added correctly whether the user exists or not
         finalButtons.push([{ text: "📞 Update Phone", callback_data: "cb_update_phone" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }]);
         finalButtons.push([{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]);
 
@@ -429,13 +429,207 @@ async function sendHelpMessage(chatId) {
 
         await sendMessage(chatId, MESSAGES.help, "HTML", keyboard);
     } catch (e) {
-        // Fallback if DB fails during help message construction
         console.error("❌ sendHelpMessage failed:", e.message);
         await sendMessage(chatId, "❌ Database error when loading help menu. Please try /start again.");
     }
 }
 
 /* --------------------- General Handlers ---------------------- */
+
+async function getUniqueLocations() {
+    const db = getFirebaseDb();
+    const snapshot = await db.collection('buses').get();
+    const sources = new Set();
+    const destinations = new Set();
+
+    snapshot.forEach(doc => {
+        const data = doc.data();
+        if (data.from) sources.add(data.from);
+        if (data.to) destinations.add(data.to);
+    });
+
+    return { sources: Array.from(sources).sort(), destinations: Array.from(destinations).sort() };
+}
+
+async function handleStartSearch(chatId) {
+    try {
+        const locations = await getUniqueLocations();
+        
+        if (locations.sources.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "HTML");
+        
+        const keyboard = {
+            inline_keyboard: locations.sources.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
+        };
+
+        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', {});
+        await sendMessage(chatId, MESSAGES.search_from, "HTML", keyboard);
+
+    } catch (e) {
+        console.error('Error starting search:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleSearchInputCallback(chatId, callbackData, state) {
+    const db = getFirebaseDb();
+    let data = state.data;
+    let nextState = '';
+    let response = '';
+    let keyboard = null;
+
+    if (state.state === 'AWAITING_SEARCH_FROM') {
+        const from = callbackData.replace('cb_search_from_', '');
+        data.from = from;
+        
+        const snapshot = await db.collection('buses').where('from', '==', from).get();
+        const availableDestinations = new Set();
+        snapshot.forEach(doc => availableDestinations.add(doc.data().to));
+
+        keyboard = {
+            inline_keyboard: Array.from(availableDestinations).map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
+        };
+
+        if (Array.from(availableDestinations).length === 0) {
+             await saveAppState(chatId, 'IDLE', {});
+             return await sendMessage(chatId, `❌ No destinations available from <b>${from}</b>.`, "HTML");
+        }
+
+        nextState = 'AWAITING_SEARCH_TO';
+        response = MESSAGES.search_to;
+        
+    } else if (state.state === 'AWAITING_SEARCH_TO') {
+        data.to = callbackData.replace('cb_search_to_', '');
+
+        keyboard = {
+            inline_keyboard: [
+                [{ text: "📅 Today", callback_data: `cb_search_date_today` }],
+                [{ text: "➡️ Tomorrow", callback_data: `cb_search_date_tomorrow` }],
+                [{ text: "🗓️ Pick Specific Date (WIP)", callback_data: `cb_search_date_specific` }],
+            ]
+        };
+        nextState = 'AWAITING_SEARCH_DATE';
+        response = MESSAGES.search_date;
+
+    } else if (state.state === 'AWAITING_SEARCH_DATE') {
+        data.dateType = callbackData.replace('cb_search_date_', '');
+        let targetDate;
+
+        if (data.dateType === 'today') {
+            targetDate = new Date().toISOString().split('T')[0];
+        } else if (data.dateType === 'tomorrow') {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            targetDate = tomorrow.toISOString().split('T')[0];
+        } else {
+            await saveAppState(chatId, 'IDLE', {});
+            return await sendMessage(chatId, MESSAGES.feature_wip + " Please restart search and select Today or Tomorrow.");
+        }
+        
+        data.date = targetDate;
+        await saveAppState(chatId, 'IDLE', {}); // Reset state before showing results
+        
+        // Final action: show results
+        return await showSearchResults(chatId, data.from, data.to, data.date);
+    }
+
+    await saveAppState(chatId, nextState, data);
+    await sendMessage(chatId, response, "HTML", keyboard);
+}
+
+async function showSearchResults(chatId, from, to, date) {
+    try {
+        const db = getFirebaseDb();
+        
+        const snapshot = await db.collection('buses')
+            .where('from', '==', from)
+            .where('to', '==', to)
+            .get(); 
+
+        const buses = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            if (data.departure_time.startsWith(date)) {
+                 buses.push({
+                    busID: data.bus_id, from: data.from, to: data.to,
+                    date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
+                    owner: data.owner, price: data.price, busType: data.bus_type,
+                    rating: data.rating || 4.2, total_seats: data.total_seats || 40 
+                });
+            }
+        });
+
+        if (buses.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "HTML");
+
+        let response = MESSAGES.search_results.replace('{from}', from).replace('{to}', to).replace('{date}', date);
+        
+        for (const bus of buses) {
+            const seatsSnapshot = await db.collection('seats').where('bus_id', '==', bus.busID).where('status', '==', 'available').get();
+            const availableSeats = seatsSnapshot.size;
+
+            response += `<b>${bus.busID}</b> - ${bus.owner}\n`;
+            response += `🕒 ${bus.time}\n`;
+            response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
+            response += `💺 ${availableSeats} seats available\n`;
+            response += `📋 "Show seats ${bus.busID}" to view seats\n\n`;
+        }
+        await sendMessage(chatId, response, "HTML");
+        
+    } catch (error) {
+        console.error('❌ Bus search results error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleShowManifest(chatId, text) {
+    const match = text.match(/show manifest\s+(BUS\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID.\nExample: <pre>Show manifest BUS101</pre>", "HTML");
+
+    const busID = match[1].toUpperCase();
+
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+        return await sendMessage(chatId, "❌ You do not have permission to view the manifest.");
+    }
+    
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`, "HTML");
+        const busData = busDoc.data();
+
+        const snapshot = await db.collection('bookings')
+            .where('bus_id', '==', busID)
+            .where('status', '==', 'confirmed')
+            .get();
+            
+        if (snapshot.empty) return await sendMessage(chatId, MESSAGES.no_manifest.replace('{busID}', busID), "HTML");
+        
+        let manifestText = MESSAGES.manifest_header
+            .replace('{busID}', busID)
+            .replace('{from}', busData.from)
+            .replace('{to}', busData.to)
+            .replace('{date}', busData.departure_time.split(' ')[0])
+            .replace('{count}', snapshot.docs.reduce((sum, doc) => sum + doc.data().total_seats, 0));
+
+        snapshot.forEach(doc => {
+            const booking = doc.data();
+            booking.passengers.forEach(p => {
+                manifestText += MESSAGES.manifest_entry
+                    .replace('{seat}', p.seat)
+                    .replace('{name}', p.name)
+                    .replace('{aadhar}', p.aadhar)
+                    .replace('{gender}', `(${p.gender})`) + "\n";
+            });
+        });
+
+        await sendMessage(chatId, manifestText, "HTML");
+
+    } catch (e) {
+        console.error('❌ Manifest Generation Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
 
 async function handleUpdatePhoneNumberCallback(chatId) {
     const userRole = await getUserRole(chatId);
@@ -473,53 +667,9 @@ async function handlePhoneUpdateInput(chatId, text) {
     }
 }
 
-async function showAvailableBuses(chatId) {
-    try {
-        const db = getFirebaseDb();
-        const snapshot = await db.collection('buses').get();
-        const buses = [];
-        snapshot.forEach(doc => {
-            const data = doc.data();
-            buses.push({
-                busID: data.bus_id, from: data.from, to: data.to,
-                date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
-                owner: data.owner, price: data.price, busType: data.bus_type,
-                rating: data.rating || 4.2, total_seats: data.total_seats || 40 
-            });
-        });
-
-        if (buses.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "HTML");
-
-        let response = `🚌 <b>Available Buses</b> 🚌\n\n`;
-        for (const bus of buses) {
-            // Fetch available seats dynamically (or use pre-calculated field)
-            const seatsSnapshot = await db.collection('seats').where('bus_id', '==', bus.busID).where('status', '==', 'available').get();
-            const availableSeats = seatsSnapshot.size;
-
-            response += `<b>${bus.busID}</b> - ${bus.owner}\n`;
-            response += `📍 ${bus.from} → ${bus.to}\n`;
-            response += `📅 ${bus.date} 🕒 ${bus.time}\n`;
-            response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
-            response += `💺 ${availableSeats} seats available\n`;
-            response += `📋 "Show seats ${bus.busID}" to view seats\n\n`;
-        }
-        await sendMessage(chatId, response, "HTML");
-        
-    } catch (error) {
-        console.error('❌ Bus search error:', error.message);
-        await sendMessage(chatId, MESSAGES.db_error);
-    }
-}
-
 async function handleBusSearch(chatId) {
-    const keyboard = {
-        inline_keyboard: [
-            [{ text: "🧍 Single Passenger", callback_data: "cb_booking_single" }],
-            [{ text: "🧑‍🤝‍🧑 Couple / Husband-Wife (WIP)", callback_data: "cb_booking_couple" }],
-            [{ text: "👪 Family / Group (WIP)", callback_data: "cb_booking_family" }],
-        ]
-    };
-    await sendMessage(chatId, MESSAGES.booking_type_prompt, "HTML", keyboard);
+    // This function is now the entry point for the guided search
+    await handleStartSearch(chatId);
 }
 
 async function handleCancellation(chatId, text) {
@@ -546,7 +696,7 @@ async function handleCancellation(chatId, text) {
 
         bookingData.seats.forEach(seatNo => {
             const seatRef = db.collection('seats').doc(`${bookingData.bus_id}-${seatNo}`);
-            batch.update(seatRef, { status: 'available', booking_id: admin.firestore.FieldValue.delete(), temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+            batch.set(seatRef, { status: 'available', booking_id: admin.firestore.FieldValue.delete(), temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() }, { merge: true });
         });
 
         await batch.commit();
@@ -586,7 +736,6 @@ async function startUserRegistration(chatId, user) {
         }
     } catch (error) {
         console.error(`❌ CRITICAL /start error for ${chatId}:`, error.message);
-        // If DB fails here, the user receives a more detailed generic DB error.
         await sendMessage(chatId, MESSAGES.db_error + " (Check FIREBASE_CREDS_BASE64/Permissions. Error: " + error.message + ")");
     }
 }
@@ -703,7 +852,6 @@ async function checkSeatSafety(busID, seatNo, requestedGender) {
 
     const db = getFirebaseDb();
     
-    // Simple adjacent seat logic (1A -> 1B, 2B -> 2A, 1C -> 1D, 2D -> 2C)
     const column = seatNo.slice(-1);
     const row = seatNo.slice(0, -1);
     let adjacentSeatNo = null;
@@ -713,14 +861,12 @@ async function checkSeatSafety(busID, seatNo, requestedGender) {
     else if (column === 'C') adjacentSeatNo = row + 'D';
     else if (column === 'D') adjacentSeatNo = row + 'C';
     
-    // If seat is not part of a pair (e.g., if there were a column E), safety check is unnecessary
     if (!adjacentSeatNo) return true;
 
     const adjacentDoc = await db.collection('seats').doc(`${busID}-${adjacentSeatNo}`).get();
     
     if (adjacentDoc.exists) {
         const data = adjacentDoc.data();
-        // Check if the adjacent seat is occupied (booked or locked) and the passenger is Female
         if (data.status !== 'available' && data.gender === 'F') {
             return false;
         }
@@ -750,7 +896,6 @@ async function handleSeatMap(chatId, text) {
             if (data.status === 'available') availableCount++;
         });
         
-        // --- SEAT MAP GENERATION ---
         let seatMap = `🚍 <b>Seat Map - ${busID}</b>\n`;
         seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
         seatMap += `📅 ${busInfo.date} 🕒 ${busInfo.time}\n\n`;
@@ -763,7 +908,7 @@ async function handleSeatMap(chatId, text) {
                 const data = seatStatus[seatNo] || {}; 
                 const status = data.status || '⬜'; 
                 
-                let display = '⬜'; // Default placeholder for non-existent/unconfigured seat
+                let display = '⬜'; 
                 if (status === 'available') {
                     display = `🟩${seatNo}`;
                 } else if (status === 'booked' || status === 'locked') {
@@ -771,13 +916,12 @@ async function handleSeatMap(chatId, text) {
                     display = `⚫${seatNo}${genderTag}`;
                 } 
                 
-                // Using a monospaced spacing for better alignment in Telegram
                 line += `${display.padEnd(7)}`; 
                 if (col === 'B') {
-                    line += `   🚌   `; // Wider gap for aisle
+                    line += `   🚌   `; 
                 } 
             }
-            seatMap += `<pre>${line}</pre>`; // Use <pre> tag to maintain fixed-width font/spacing
+            seatMap += `<pre>${line}</pre>`; 
         }
         
         seatMap += `\n📊 <b>${availableCount}</b> seats available / ${seatsSnapshot.size || 0}\n\n`;
@@ -945,7 +1089,7 @@ async function createPaymentOrder(chatId, booking) {
 
         await sendMessage(chatId, 
             MESSAGES.payment_required.replace('{amount}', (totalAmount / 100).toFixed(2)).replace('{paymentUrl}', paymentUrl).replace('{orderId}', order.id), 
-            "HTML", keyboard); // Pass keyboard here
+            "HTML", keyboard); 
 
     } catch (error) {
         console.error('❌ Payment Order Creation Error:', error.message);
@@ -968,7 +1112,6 @@ async function handlePaymentCancelCallback(chatId) {
         // 2. Clear state and session
         const db = getFirebaseDb();
         if (booking.razorpay_order_id) {
-            // Delete payment session to prevent webhook confusion later
             await db.collection('payment_sessions').doc(booking.razorpay_order_id).delete();
         }
         await saveAppState(chatId, 'IDLE', {});
@@ -1038,6 +1181,10 @@ async function commitFinalBookingBatch(chatId, booking) {
     const seatList = booking.seats.map(s => s.seatNo).join(', ');
     const [journeyDate, departTime] = (busData.departure_time || 'N/A N/A').split(' ');
 
+    const boardingPointsText = (busData.boarding_points && busData.boarding_points.length > 0)
+        ? busData.boarding_points.map(p => `• ${p.name} (${p.time})`).join('\n')
+        : 'N/A';
+
     const ticketMessage = MESSAGES.payment_confirmed_ticket
         .replace('{busName}', busData.bus_name || 'N/A')
         .replace('{busType}', busData.bus_type || 'N/A')
@@ -1046,6 +1193,7 @@ async function commitFinalBookingBatch(chatId, booking) {
         .replace('{journeyDate}', journeyDate)
         .replace('{departTime}', departTime)
         .replace('{seatList}', seatList)
+        .replace('{boardingPoints}', boardingPointsText)
         .replace('{name}', userData.name || 'N/A')
         .replace('{phone}', userData.phone || 'N/A')
         .replace('{orderId}', booking.razorpay_order_id)
@@ -1154,7 +1302,7 @@ async function handleManagerInput(chatId, text, state) {
 
                 data.currentRow++;
                 
-                if (data.currentRow <= 10) { // Assuming a max of 10 rows for configuration
+                if (data.currentRow <= 10) { 
                     nextState = 'MANAGER_ADD_SEAT_TYPE';
                     response = MESSAGES.manager_add_seat_type.replace('{row}', data.currentRow);
                 } else {
@@ -1187,46 +1335,79 @@ async function handleManagerInput(chatId, text, state) {
             case 'MANAGER_ADD_BUS_MANAGER_PHONE':
                 data.managerPhone = text.replace(/[^0-9]/g, '');
                 if (!data.managerPhone.match(phoneRegex)) return await sendMessage(chatId, "❌ Invalid Phone Number. Enter a 10-digit number:", "HTML");
-                
-                const userDoc = await db.collection('users').doc(String(chatId)).get();
-                const ownerName = userDoc.exists ? userDoc.data().name : 'System Owner';
 
-                const uniqueBusId = `BUS${Date.now().toString().slice(-6)}`; // Shorter BUS ID
+                const uniqueBusId = `BUS${Date.now().toString().slice(-6)}`;
+                data.uniqueBusId = uniqueBusId;
+                data.boardingPoints = [];
                 
-                if (userDoc.exists) {
-                    await db.collection('users').doc(String(chatId)).update({
-                        phone: data.managerPhone
-                    });
-                }
-
-                const [from, to] = data.route.split(' to ').map(s => s.trim());
-                
-                await db.collection('buses').doc(uniqueBusId).set({
-                    bus_id: uniqueBusId,
-                    bus_number: data.busNumber,
-                    bus_name: data.busName,
-                    owner: ownerName,
-                    from: from,
-                    to: to,
-                    departure_time: `${data.departDate} ${data.departTime}`, 
-                    arrival_time: data.arriveTime,
-                    manager_chat_id: String(chatId), // Store the manager's chat ID
-                    manager_phone: data.managerPhone,
-                    price: data.price,
-                    bus_type: data.busLayout,
-                    seat_configuration: data.seatsToConfigure,
-                    total_seats: 40, // Assume 40 seats for now
-                    rating: 5.0,
-                    status: 'scheduled'
-                });
-                
-                await db.collection('user_state').doc(String(chatId)).delete(); 
-
-                response = MESSAGES.manager_bus_saved
-                    .replace('{busID}', uniqueBusId)
-                    .replace('{route}', data.route);
+                nextState = 'MANAGER_ADD_BUS_BOARDING_POINTS_INIT';
+                response = MESSAGES.manager_add_bus_boarding_init;
+                await saveAppState(chatId, nextState, data);
                 await sendMessage(chatId, response, "HTML");
-                return;
+                return; 
+
+            case 'MANAGER_ADD_BUS_BOARDING_POINTS_INIT':
+            case 'MANAGER_ADD_BUS_BOARDING_POINTS_INPUT': 
+                const pointMatch = text.match(/^([^\/]+)\s*\/\s*(\d{2}:\d{2})$/i);
+
+                if (text.toUpperCase() === 'DONE' || data.boardingPoints.length >= 5) {
+                    
+                    if (data.boardingPoints.length === 0) {
+                        await sendMessage(chatId, "⚠️ No boarding points added. Proceeding without them.");
+                    } else if (data.boardingPoints.length >= 5 && text.toUpperCase() !== 'DONE') {
+                         await sendMessage(chatId, "⚠️ Max 5 boarding points reached. Proceeding to save.");
+                    }
+                    
+                    // --- FINAL BUS COMMIT ---
+                    const userDoc = await db.collection('users').doc(String(chatId)).get();
+                    const ownerName = userDoc.exists ? userDoc.data().name : 'System Owner';
+                    
+                    if (userDoc.exists) {
+                        await db.collection('users').doc(String(chatId)).update({ phone: data.managerPhone });
+                    }
+                    
+                    const [from, to] = data.route.split(' to ').map(s => s.trim());
+                    
+                    await db.collection('buses').doc(data.uniqueBusId).set({
+                        bus_id: data.uniqueBusId,
+                        bus_number: data.busNumber,
+                        bus_name: data.busName,
+                        owner: ownerName,
+                        from: from,
+                        to: to,
+                        departure_time: `${data.departDate} ${data.departTime}`, 
+                        arrival_time: data.arriveTime,
+                        manager_chat_id: String(chatId), 
+                        manager_phone: data.managerPhone,
+                        price: data.price,
+                        bus_type: data.busLayout,
+                        seat_configuration: data.seatsToConfigure,
+                        boarding_points: data.boardingPoints, 
+                        total_seats: 40,
+                        rating: 5.0,
+                        status: 'scheduled'
+                    });
+                    
+                    await db.collection('user_state').doc(String(chatId)).delete(); 
+
+                    response = MESSAGES.manager_bus_saved
+                        .replace('{busID}', data.uniqueBusId)
+                        .replace('{route}', data.route);
+                    await sendMessage(chatId, response, "HTML");
+                    return;
+
+                } else if (pointMatch) {
+                    const pointName = pointMatch[1].trim();
+                    const time = pointMatch[2].trim();
+                    data.boardingPoints.push({ name: pointName, time: time });
+                    nextState = 'MANAGER_ADD_BUS_BOARDING_POINTS_INPUT';
+                    response = MESSAGES.manager_add_bus_boarding_more;
+
+                } else {
+                    nextState = state.state;
+                    response = MESSAGES.manager_add_bus_boarding_invalid;
+                }
+                break;
         }
 
         await saveAppState(chatId, nextState, data);
@@ -1269,7 +1450,6 @@ async function handleAddSeatsCommand(chatId, text) {
         
         const seatCols = ['A', 'B', 'C', 'D'];
         
-        // Loop through the configured rows/types
         for (const rowConfig of config) {
             if (seatsAdded >= count) break;
             
@@ -1424,7 +1604,6 @@ async function handleUserMessage(chatId, text, user) {
                     [{ text: "❌ Cancel Booking", callback_data: "cb_payment_cancel" }]
                 ]
             };
-            const paymentUrl = `https://rzp.io/i/${state.data.razorpay_order_id}`;
             
             await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', state.data.razorpay_order_id), "HTML", keyboard);
         }
@@ -1452,6 +1631,9 @@ async function handleUserMessage(chatId, text, user) {
     }
     else if (textLower.startsWith('add seats')) {
         await handleAddSeatsCommand(chatId, text);
+    }
+    else if (textLower.startsWith('show manifest')) {
+        await handleShowManifest(chatId, text);
     }
     else if (textLower.startsWith('live tracking')) { 
         await sendMessage(chatId, MESSAGES.feature_wip);
@@ -1495,7 +1677,9 @@ app.post('/api/webhook', async (req, res) => {
             
             await answerCallbackQuery(callback.id);
             // Delete the keyboard once a button is clicked
-            await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+            if (!callbackData.startsWith('cb_search_')) {
+                await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
+            }
 
             await sendChatAction(chatId, "typing");
             
@@ -1504,9 +1688,10 @@ app.post('/api/webhook', async (req, res) => {
             // --- ROUTE CALLBACKS ---
             if (callbackData.startsWith('cb_register_role_')) {
                 await handleRoleSelection(chatId, callback.from, callbackData);
+            } else if (callbackData.startsWith('cb_search_')) {
+                 await handleSearchInputCallback(chatId, callbackData, state);
             } else if (callbackData === 'cb_payment_confirm') { 
                 if (state.state === 'AWAITING_PAYMENT') {
-                    // This is the user confirming they have paid
                     await handlePaymentVerification(chatId, state.data);
                 } else {
                     await sendMessage(chatId, "❌ No active payment to confirm.");
@@ -1516,7 +1701,7 @@ app.post('/api/webhook', async (req, res) => {
             } else if (callbackData === 'cb_book_bus') {
                 await handleBusSearch(chatId);
             } else if (callbackData === 'cb_booking_single') {
-                await showAvailableBuses(chatId);
+                await handleBusSearch(chatId); // Reroute to smart search flow
             } else if (callbackData === 'cb_my_booking') {
                 await handleBookingInfo(chatId);
             } else if (callbackData === 'cb_my_profile') {
@@ -1541,11 +1726,12 @@ app.post('/api/webhook', async (req, res) => {
                 await sendHelpMessage(chatId);
             } else if (callbackData === 'cb_booking_couple' || callbackData === 'cb_booking_family') {
                 await sendMessage(chatId, MESSAGES.feature_wip);
+            } else if (callbackData === 'cb_show_manifest_prompt') {
+                await sendMessage(chatId, "📋 Please send the manifest command with the Bus ID.\nExample: <pre>Show manifest BUS101</pre>", "HTML");
             }
         }
     } catch (error) {
         console.error("Error in main handler:", error.message);
-        // Fallback error handler if something catastrophic happens in the flow
         const chatId = update.message?.chat.id || update.callback_query?.message.chat.id;
         if (chatId) {
             await sendMessage(chatId, "❌ A critical application error occurred. Please try /start again.");
@@ -1560,7 +1746,6 @@ app.post('/api/razorpay/webhook', async (req, res) => {
     const signature = req.headers['x-razorpay-signature'];
     const payload = req.rawBody; 
 
-    // Ensure DB is initialized for webhook processing
     try { getFirebaseDb(); } catch (e) {
         console.error("CRITICAL FIREBASE INITIALIZATION FAILED during Razorpay webhook.", e.message);
         return res.status(500).send('DB Init Error');
@@ -1585,13 +1770,10 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             const bookingData = sessionDoc.data().booking;
             
             if (event === 'order.paid') {
-                // Since this is a server-to-server call, we trust the payment
                 await commitFinalBookingBatch(bookingData.chat_id, bookingData); 
             } else if (event === 'payment.failed') {
-                // Payment failed, release seats
                 await unlockSeats(bookingData);
                 await db.collection('payment_sessions').doc(orderId).delete();
-                // Send specific payment failed message
                 await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
             }
         }
