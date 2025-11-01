@@ -44,7 +44,7 @@ Select an option from the menu below to get started. You can also type commands 
   safety_violation: "🚫 *Seat Safety Violation:* A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
   details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`",
   booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n*What's next?*",
-  booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!\n\nYour E-Ticket has been successfully processed.", // FINAL MESSAGE
+  booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!\n\nYour E-Ticket has been successfully processed.", 
   booking_details_error: "❌ *Error!* Please provide details in the format: `[Name] / [Age] / [Aadhar Number]`",
   seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
   no_bookings: "📭 You don't have any active bookings.",
@@ -55,12 +55,13 @@ Select an option from the menu below to get started. You can also type commands 
   payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).",
   payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
 
-  // Manager
+  // Manager (UPDATED PROMPTS)
   manager_add_bus_init: "📝 *Bus Creation:* Enter the **Bus Number** (e.g., `MH-12 AB 1234`):",
   manager_add_bus_number: "🚌 Enter the **Bus Name** (e.g., `Sharma Travels`):", // New Prompt
   manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
   manager_add_bus_price: "💰 Enter the Base Price (e.g., `850`):",
   manager_add_bus_type: "🛋️ Enter the **Bus Seating Layout** (e.g., `Seater`, `Sleeper`, or `Both`):", // NEW PROMPT
+  manager_add_seat_type: "🪑 Enter the seat type for **Row {row}** (e.g., `Sleeper Upper`, `Sleeper Lower`, or `Seater`):", // NEW SEAT PROMPT
   manager_add_bus_depart_date: "📅 Enter the Departure Date (YYYY-MM-DD, e.g., `2025-12-25`):",
   manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
   manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
