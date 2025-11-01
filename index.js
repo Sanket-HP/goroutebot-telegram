@@ -398,7 +398,8 @@ async function sendHelpMessage(chatId) {
         await sendMessage(chatId, MESSAGES.help, "Markdown", keyboard);
     } catch (e) {
         // Fallback if DB fails during help message construction
-        await sendMessage(chatId, "❌ Database error when loading help menu. Please check DB connection.");
+        console.error("❌ sendHelpMessage failed:", e.message);
+        await sendMessage(chatId, "❌ Database error when loading help menu. Please try /start again.");
     }
 }
 
@@ -531,14 +532,17 @@ async function handleCancellation(chatId, text) {
 async function startUserRegistration(chatId, user) {
     try {
         const db = getFirebaseDb(); // Try to get DB
+        console.log(`[START FLOW] User ${chatId}: Attempting to read user document.`);
         
         const doc = await db.collection('users').doc(String(chatId)).get();
 
         if (doc.exists) {
+           console.log(`[START FLOW] User ${chatId}: Found existing user. Sending welcome back.`);
            const userName = user.first_name || 'User'; 
            await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
            await sendHelpMessage(chatId); 
         } else {
+            console.log(`[START FLOW] User ${chatId}: New user. Sending role prompt.`);
             const keyboard = {
                 inline_keyboard: [
                     [{ text: "👤 User (Book Tickets)", callback_data: "cb_register_role_user" }],
@@ -549,9 +553,9 @@ async function startUserRegistration(chatId, user) {
             await sendMessage(chatId, MESSAGES.prompt_role, "Markdown", keyboard);
         }
     } catch (error) {
-        console.error(`❌ /start error for ${chatId}:`, error.message);
-        // If DB fails here, the user receives the generic DB error.
-        await sendMessage(chatId, MESSAGES.db_error + " (Check FIREBASE_CREDS_BASE64)");
+        console.error(`❌ CRITICAL /start error for ${chatId}:`, error.message);
+        // If DB fails here, the user receives a more detailed generic DB error.
+        await sendMessage(chatId, MESSAGES.db_error + " (Check FIREBASE_CREDS_BASE64/Permissions. Error: " + error.message + ")");
     }
 }
 
@@ -1004,12 +1008,6 @@ async function handleManagerInput(chatId, text, state) {
                 data.busName = text;
                 nextState = 'MANAGER_ADD_BUS_ROUTE';
                 response = MESSAGES.manager_add_bus_route;
-                break;
-                
-            case 'MANAGER_ADD_BUS_ROUTE':
-                data.route = text;
-                nextState = 'MANAGER_ADD_BUS_PRICE';
-                response = MESSAGES.manager_add_bus_price;
                 break;
 
             case 'MANAGER_ADD_BUS_PRICE':
