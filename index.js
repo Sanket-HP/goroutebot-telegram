@@ -30,9 +30,9 @@ Select an option from the menu below to get started. You can also type commands 
     
     // Registration
     prompt_role: "🎉 *Welcome to GoRoute!* To get started, please choose your role:",
-    registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n`my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]`", 
+    registration_started: "✅ Great! Your role is set to *{role}*.\n\nTo complete your profile, please provide your details in this format:\n\n\`my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]\`", 
     profile_updated: "✅ *Profile Updated!* Your details have been saved.",
-    profile_update_error: "❌ *Error!* Please use the correct format:\n`my profile details [Name] / [Aadhar Number] / [Phone Number]`", 
+    profile_update_error: "❌ *Error!* Please use the correct format:\n\`my profile details [Name] / [Aadhar Number] / [Phone Number]\`", 
     user_not_found: "❌ User not found. Please send /start to register.",
 
     // Phone Update
@@ -44,10 +44,10 @@ Select an option from the menu below to get started. You can also type commands 
     booking_type_prompt: "👤 *Booking Seats:* Please select your booking type:",
     gender_prompt: "🚻 *Seat Safety:* Is the passenger booking seat {seatNo} a Male or Female?",
     safety_violation: "🚫 *Seat Safety Violation:* A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
-    details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`",
+    details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n\`[Name] / [Age] / [Aadhar Number]\`",
     booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n*What's next?*",
     booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!\n\nYour E-Ticket has been successfully processed.", 
-    booking_details_error: "❌ *Error!* Please provide details in the format: `[Name] / [Age] / [Aadhar Number]`",
+    booking_details_error: "❌ *Error!* Please provide details in the format: \`[Name] / [Age] / [Aadhar Number]\`",
     seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
     no_bookings: "📭 You don't have any active bookings.",
     booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
@@ -314,9 +314,6 @@ async function handleUserMessage(chatId, text, user) {
     }
     else if (textLower.startsWith('book seat')) {
         await handleSeatSelection(chatId, text);
-    }
-    else if (textLower === 'my booking' || textLower === 'my tickets') {
-        await handleBookingInfo(chatId);
     }
     else if (textLower.startsWith('cancel booking')) {
         await handleCancellation(chatId, text);
