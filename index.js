@@ -3,10 +3,12 @@ const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
 const Razorpay = require('razorpay'); // NEW: Import Razorpay
+const crypto = require('crypto'); // FIX: Added missing crypto import
 
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET; // Needed for webhook verification
 
 // --- Razorpay Initialization ---
 const razorpay = new Razorpay({
@@ -44,32 +46,35 @@ Select an option from the menu below to get started. You can also type commands 
   safety_violation: "🚫 *Seat Safety Violation:* A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
   details_prompt: "✍️ *Passenger Details:* Please enter the passenger's Name, Age, and Aadhar number in this format:\n`[Name] / [Age] / [Aadhar Number]`",
   booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n*What's next?*",
-  booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!",
+  booking_finish: "🎫 *Booking Confirmed!* Your seats are reserved.\n\n*Booking ID:* {bookingId}\n*Total Seats:* {count}\n\nThank you for choosing GoRoute!\n\nYour E-Ticket has been successfully processed.", 
   booking_details_error: "❌ *Error!* Please provide details in the format: `[Name] / [Age] / [Aadhar Number]`",
   seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
   no_bookings: "📭 You don't have any active bookings.",
   booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
   
   // Payment (NEW MESSAGES)
-  payment_required: "💰 *Payment Required:* Total Amount: ₹{amount} INR.\n\n[Click here to pay]({paymentUrl})\n\n*Type 'paid' after successful payment.*",
-  payment_awaiting: "⏳ Waiting for payment confirmation. Please type 'paid' after completing the transaction.",
-  payment_failed: "❌ Payment verification failed. Please try payment again or contact support.",
+  payment_required: "💰 *Payment Required:* Total Amount: ₹{amount} INR.\n\n*Order ID: {orderId}*\n\n[Click here to pay]({paymentUrl})\n\n*(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)*",
+  payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).",
+  payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
 
   // Manager
   manager_add_bus_init: "📝 *Bus Creation:* Enter the **Bus Number** (e.g., `MH-12 AB 1234`):",
   manager_add_bus_number: "🚌 Enter the **Bus Name** (e.g., `Sharma Travels`):", // New Prompt
   manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
   manager_add_bus_price: "💰 Enter the Base Price (e.g., `850`):",
-  manager_add_bus_type: "🚌 Enter the Bus Type (e.g., `AC Seater`):",
+  manager_add_bus_type: "🛋️ Enter the **Bus Seating Layout** (e.g., `Seater`, `Sleeper`, or `Both`):", // NEW PROMPT
+  manager_add_seat_type: "🪑 Enter the seat type for **Row {row}** (e.g., `Sleeper Upper`, `Sleeper Lower`, or `Seater`):", // NEW SEAT PROMPT
   manager_add_bus_depart_date: "📅 Enter the Departure Date (YYYY-MM-DD, e.g., `2025-12-25`):",
   manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
   manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
   manager_add_bus_manager_phone: "📞 *Final Step:* Enter your Phone Number to associate with the bus:",
-  manager_bus_saved: "✅ *Bus {busID} created and tracking enabled!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
+  manager_bus_saved: "✅ *Bus {busID} created!* Route: {route}. Next, add seats: \n\n*Next Step:* Now, create all seats for this bus by typing:\n`add seats {busID} 40`",
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
+  manager_invalid_layout: "❌ Invalid layout. Please enter `Seater`, `Sleeper`, or `Both`.",
+  manager_invalid_seat_type: "❌ Invalid seat type. Please enter `Sleeper Upper`, `Sleeper Lower`, or `Seater`.",
 
-  // Tracking
+  // Tracking (MESSAGES KEPT FOR CONTEXT)
   tracking_manager_prompt: "📍 *Live Tracking Setup:* Enter the Bus ID you wish to track/update (e.g., `BUS101`).",
   tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
   tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
@@ -85,7 +90,8 @@ Select an option from the menu below to get started. You can also type commands 
 
 // Create the server
 const app = express();
-app.use(express.json());
+// The Razorpay webhook requires raw body parsing for signature verification
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // --- Database Initialization ---
 let db; 
@@ -94,10 +100,6 @@ function getFirebaseDb() {
   if (db) return db;
 
   try {
-    if (admin.apps.length > 0) {
-      db = admin.firestore();
-      return db;
-    }
     
     // --- SAFETY CHECK ---
     const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
@@ -109,10 +111,19 @@ function getFirebaseDb() {
     const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
     const serviceAccount = JSON.parse(jsonString);
 
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount)
-    });
+    // --- FIX: Attempt initialization, but catch the error if it's already running ---
+    try {
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+    } catch (error) {
+        // Error: "The default Firebase app already exists." is expected on Vercel cold restarts
+        if (!error.message.includes("default Firebase app already exists")) {
+            throw error;
+        }
+    }
     
+    // Get the Firestore instance (whether new or already existing)
     db = admin.firestore();
     return db;
 
@@ -163,7 +174,7 @@ app.post('/api/webhook', async (req, res) => {
       } else if (callbackData === 'cb_add_bus_manager') {
         await handleManagerAddBus(chatId);
       } else if (callbackData === 'cb_start_tracking') { 
-        await handleManagerLiveTrackingSetup(chatId);
+        await sendMessage(chatId, MESSAGES.feature_wip + " Live Tracking management is temporarily disabled.");
       } else if (callbackData === 'cb_inventory_sync') { 
         await handleInventorySyncSetup(chatId);
       } else if (callbackData === 'cb_update_phone') { 
@@ -191,6 +202,50 @@ app.post('/api/webhook', async (req, res) => {
 });
 
 
+// --- NEW RAZORPAY WEBHOOK ENDPOINT ---
+app.post('/api/razorpay/webhook', async (req, res) => {
+    // 1. Get raw body and signature
+    const signature = req.headers['x-razorpay-signature'];
+    
+    // IMPORTANT: The rawBody is created in the app.use(express.json) middleware
+    const payload = req.rawBody; 
+
+    // 2. Respond immediately to avoid retries from Razorpay
+    res.status(200).send('OK');
+
+    // 3. Security Check (CRITICAL)
+    if (RAZORPAY_WEBHOOK_SECRET && !verifyRazorpaySignature(payload, signature)) {
+        console.error("WEBHOOK ERROR: Signature verification failed. Ignoring update.");
+        return; 
+    }
+
+    // 4. Process the event
+    const event = req.body.event;
+    
+    if (event === 'payment.failed' || event === 'order.paid') {
+        const orderId = req.body.payload.order.entity.id;
+        const db = getFirebaseDb();
+        
+        // Find the pending session using the Razorpay Order ID
+        const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
+
+        if (sessionDoc.exists) {
+            const bookingData = sessionDoc.data().booking;
+            
+            if (event === 'order.paid') {
+                // Finalize the booking now that payment is confirmed
+                await commitFinalBookingBatch(bookingData.chat_id, bookingData); 
+            } else if (event === 'payment.failed') {
+                // Payment failed; release the seat immediately
+                await unlockSeats(bookingData);
+                await db.collection('payment_sessions').doc(orderId).delete();
+                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
+            }
+        }
+    }
+});
+
+
 /* --------------------- Message Router ---------------------- */
 
 async function handleUserMessage(chatId, text, user) {
@@ -204,12 +259,14 @@ async function handleUserMessage(chatId, text, user) {
       } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
          await handleManagerInput(chatId, text, state);
       } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
-         await handleLiveTrackingSetupInput(chatId, text, state);
+         // Removed handleLiveTrackingSetupInput as the flow is disabled
+         await sendMessage(chatId, MESSAGES.feature_wip);
       } else if (state.state === 'AWAITING_NEW_PHONE') { 
          await handlePhoneUpdateInput(chatId, text);
       } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
          await handleInventorySyncInput(chatId, text, state);
       } else if (state.state === 'AWAITING_PAYMENT' && textLower === 'paid') { // Handle 'paid' text input
+         // User is manually checking payment status
          await handlePaymentVerification(chatId, state.data);
          return;
       }
@@ -245,7 +302,8 @@ async function handleUserMessage(chatId, text, user) {
     await handleAddSeatsCommand(chatId, text);
   }
   else if (textLower.startsWith('live tracking')) { 
-    await handleLiveTracking(chatId, text);
+    // Removed handleLiveTracking as the feature is disabled
+    await sendMessage(chatId, MESSAGES.feature_wip + " Live Tracking is currently disabled.");
   }
   else if (textLower === 'help' || textLower === '/help') {
     await sendHelpMessage(chatId);
@@ -282,7 +340,6 @@ async function sendHelpMessage(chatId) {
         baseButtons = [
             [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
             [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }], // NEW BUTTON
-            [{ text: "📍 Start Tracking", callback_data: "cb_start_tracking" }], 
             [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
         ];
     } else {
@@ -840,7 +897,7 @@ async function createPaymentOrder(chatId, booking) {
         const paymentUrl = `https://rzp.io/i/${order.id}`;
         
         await sendMessage(chatId, 
-            MESSAGES.payment_required.replace('{amount}', (totalAmount / 100).toFixed(2)).replace('{paymentUrl}', paymentUrl), 
+            MESSAGES.payment_required.replace('{amount}', (totalAmount / 100).toFixed(2)).replace('{paymentUrl}', paymentUrl).replace('{orderId}', order.id), 
             "Markdown");
 
     } catch (error) {
@@ -1007,7 +1064,7 @@ async function handleManagerAddBus(chatId) {
              return await sendMessage(chatId, "❌ You do not have permission to add buses.");
         }
         
-        await saveAppState(chatId, 'MANAGER_ADD_BUS_ID', {});
+        await saveAppState(chatId, 'MANAGER_ADD_BUS_NUMBER', {}); // Start with Bus Number prompt
         await sendMessage(chatId, MESSAGES.manager_add_bus_init, "Markdown");
 
     } catch (error) {
@@ -1025,10 +1082,12 @@ async function handleManagerInput(chatId, text, state) {
     const timeRegex = /^\d{2}:\d{2}$/;
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     const phoneRegex = /^\d{10}$/;
+    const validLayouts = ['seater', 'sleeper', 'both'];
+    const validSeatTypes = ['sleeper upper', 'sleeper lower', 'seater'];
 
     try {
         switch (state.state) {
-            case 'MANAGER_ADD_BUS_ID': // Changed to MANAGER_ADD_BUS_NUMBER
+            case 'MANAGER_ADD_BUS_NUMBER': 
                 data.busNumber = text.toUpperCase().replace(/[^A-Z0-9\s-]/g, '');
                 if (!data.busNumber) return await sendMessage(chatId, "❌ Invalid Bus Number. Try again:", "Markdown");
                 
@@ -1057,11 +1116,45 @@ async function handleManagerInput(chatId, text, state) {
                 break;
                 
             case 'MANAGER_ADD_BUS_TYPE':
-                data.busType = text;
-                nextState = 'MANAGER_ADD_BUS_DEPART_DATE';
-                response = MESSAGES.manager_add_bus_depart_date;
+                data.busLayout = text.toLowerCase().trim();
+                if (!validLayouts.includes(data.busLayout)) return await sendMessage(chatId, MESSAGES.manager_invalid_layout, "Markdown");
+
+                data.seatsToConfigure = []; // Initialize array to hold row configurations
+                
+                // NEW LOGIC: Start configuration for the first row (if not standard seater)
+                if (data.busLayout === 'seater' || data.busLayout === 'sleeper' || data.busLayout === 'both') {
+                    data.currentRow = 1;
+                    nextState = 'MANAGER_ADD_SEAT_TYPE';
+                    response = MESSAGES.manager_add_seat_type.replace('{row}', data.currentRow);
+                } else {
+                    nextState = 'MANAGER_ADD_BUS_DEPART_DATE';
+                    response = MESSAGES.manager_add_bus_depart_date;
+                }
                 break;
             
+            case 'MANAGER_ADD_SEAT_TYPE':
+                const seatTypeInput = text.toLowerCase().trim();
+                const isValidSeatType = validSeatTypes.includes(seatTypeInput);
+
+                if (!isValidSeatType) return await sendMessage(chatId, MESSAGES.manager_invalid_seat_type, "Markdown");
+
+                data.seatsToConfigure.push({
+                    row: data.currentRow,
+                    type: seatTypeInput
+                });
+
+                data.currentRow++;
+                
+                if (data.currentRow <= 10) { // Assuming a max of 10 rows for bus layout configuration
+                    nextState = 'MANAGER_ADD_SEAT_TYPE';
+                    response = MESSAGES.manager_add_seat_type.replace('{row}', data.currentRow);
+                } else {
+                    // All rows configured, move to schedule
+                    nextState = 'MANAGER_ADD_BUS_DEPART_DATE';
+                    response = MESSAGES.manager_add_bus_depart_date;
+                }
+                break;
+                
             case 'MANAGER_ADD_BUS_DEPART_DATE':
                 if (!text.match(dateRegex)) return await sendMessage(chatId, "❌ Invalid date format (YYYY-MM-DD). Try again:", "Markdown");
                 data.departDate = text;
@@ -1100,7 +1193,7 @@ async function handleManagerInput(chatId, text, state) {
                     });
                 }
 
-                // 3. Create Bus Document (using the generated ID)
+                // 3. Create Bus Document
                 await db.collection('buses').doc(uniqueBusId).set({
                     bus_id: uniqueBusId, // System-generated unique ID
                     bus_number: data.busNumber, // Manager's custom number
@@ -1113,6 +1206,7 @@ async function handleManagerInput(chatId, text, state) {
                     manager_phone: data.managerPhone, // Save phone to bus record
                     price: data.price,
                     bus_type: data.busType,
+                    seat_configuration: data.seatsToConfigure, // NEW: Save row configuration
                     total_seats: 40, 
                     rating: 5.0,
                     status: 'scheduled'
@@ -1161,16 +1255,28 @@ async function handleAddSeatsCommand(chatId, text) {
 
     try {
         const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID ${busID} does not exist. Please create it first.`);
+        
+        const config = busDoc.data().seat_configuration || [];
+        if (config.length === 0) return await sendMessage(chatId, `❌ Bus ${busID} configuration missing. Please start the bus creation process again.`);
+
         const batch = db.batch();
         let seatsAdded = 0;
         
         const seatCols = ['A', 'B', 'C', 'D'];
         
-        for (let row = 1; row <= 10 && seatsAdded < count; row++) {
+        // Loop through configured rows
+        for (const rowConfig of config) {
+            if (seatsAdded >= count) break;
+            
+            const rowIndex = rowConfig.row;
+            const seatType = rowConfig.type; // 'sleeper upper', 'seater', etc.
+            
             for (let col of seatCols) {
                 if (seatsAdded >= count) break;
                 
-                const seatNo = `${row}${col}`;
+                const seatNo = `${rowIndex}${col}`;
                 const docId = `${busID}-${seatNo}`;
                 const seatRef = db.collection('seats').doc(docId);
                 
@@ -1178,7 +1284,8 @@ async function handleAddSeatsCommand(chatId, text) {
                     bus_id: busID,
                     seat_no: seatNo,
                     status: 'available',
-                    gender: null // NEW: Set gender to null for available seats
+                    gender: null, // NEW: Set gender to null for available seats
+                    type: seatType, // Save type to the seat
                 });
                 seatsAdded++;
             }
