@@ -50,13 +50,9 @@ Select an option from the menu below to get started. You can also type commands 
   no_bookings: "📭 You don't have any active bookings.",
   booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
   
-  // Payment (NEW MESSAGES)
-  payment_required: "💰 *Payment Required:* Total Amount: ₹{amount} INR.\n\n[Click here to pay]({paymentUrl})\n\n*Type 'paid' after successful payment.*",
-  payment_awaiting: "⏳ Waiting for payment confirmation. Please type 'paid' after completing the transaction.",
-  payment_failed: "❌ Payment verification failed. Please try payment again or contact support.",
-
-  // Manager
-  manager_add_bus_init: "📝 *Bus Creation:* Enter the new Bus ID (e.g., `BUS201`):",
+  // Manager (UPDATED PROMPTS)
+  manager_add_bus_init: "📝 *Bus Creation:* Enter the **Bus Number** (e.g., `MH-12 AB 1234`):",
+  manager_add_bus_number: "🚌 Enter the **Bus Name** (e.g., `Sharma Travels`):", // New Prompt
   manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
   manager_add_bus_price: "💰 Enter the Base Price (e.g., `850`):",
   manager_add_bus_type: "🚌 Enter the Bus Type (e.g., `AC Seater`):",
@@ -64,7 +60,7 @@ Select an option from the menu below to get started. You can also type commands 
   manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
   manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
   manager_add_bus_manager_phone: "📞 *Final Step:* Enter your Phone Number to associate with the bus:",
-  manager_bus_saved: "✅ *Bus {busID} created and tracking enabled!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
+  manager_bus_saved: "✅ *Bus {busNumber} ({busName}) created!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
 
@@ -1027,10 +1023,16 @@ async function handleManagerInput(chatId, text, state) {
 
     try {
         switch (state.state) {
-            case 'MANAGER_ADD_BUS_ID':
-                data.busID = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
-                if (!data.busID) return await sendMessage(chatId, "❌ Invalid Bus ID. Try again:", "Markdown");
+            case 'MANAGER_ADD_BUS_ID': // Changed to MANAGER_ADD_BUS_NUMBER
+                data.busNumber = text.toUpperCase().replace(/[^A-Z0-9\s-]/g, '');
+                if (!data.busNumber) return await sendMessage(chatId, "❌ Invalid Bus Number. Try again:", "Markdown");
                 
+                nextState = 'MANAGER_ADD_BUS_NAME';
+                response = MESSAGES.manager_add_bus_number;
+                break;
+                
+            case 'MANAGER_ADD_BUS_NAME':
+                data.busName = text;
                 nextState = 'MANAGER_ADD_BUS_ROUTE';
                 response = MESSAGES.manager_add_bus_route;
                 break;
@@ -1076,23 +1078,28 @@ async function handleManagerInput(chatId, text, state) {
                 response = MESSAGES.manager_add_bus_manager_phone;
                 break;
 
-            case 'MANAGER_ADD_BUS_MANAGER_PHONE': // NEW LOGIC
+            case 'MANAGER_ADD_BUS_MANAGER_PHONE': // FINAL LOGIC
                 data.managerPhone = text.replace(/[^0-9]/g, '');
                 if (!data.managerPhone.match(phoneRegex)) return await sendMessage(chatId, "❌ Invalid Phone Number. Enter a 10-digit number:", "Markdown");
                 
                 const userDoc = await db.collection('users').doc(String(chatId)).get();
                 const ownerName = userDoc.exists ? userDoc.data().name : 'System Owner';
 
-                // 1. Update Manager's Phone Number in their Profile
+                // 1. Generate unique ID for Firebase document
+                const uniqueBusId = `BUS${Date.now()}`;
+                
+                // 2. Update Manager's Phone Number in their Profile
                 if (userDoc.exists) {
                     await db.collection('users').doc(String(chatId)).update({
                         phone: data.managerPhone // Update profile phone
                     });
                 }
 
-                // 2. Create Bus Document
-                await db.collection('buses').doc(data.busID).set({
-                    bus_id: data.busID,
+                // 3. Create Bus Document (using the generated ID)
+                await db.collection('buses').doc(uniqueBusId).set({
+                    bus_id: uniqueBusId, // System-generated unique ID
+                    bus_number: data.busNumber, // Manager's custom number
+                    bus_name: data.busName, // Manager's custom name
                     owner: ownerName,
                     from: data.route.split(' to ')[0].trim(),
                     to: data.route.split(' to ')[1].trim(),
@@ -1106,11 +1113,13 @@ async function handleManagerInput(chatId, text, state) {
                     status: 'scheduled'
                 });
                 
-                // 3. Clear state and notify manager
+                // 4. Clear state and notify manager
                 await db.collection('user_state').doc(String(chatId)).delete(); 
 
                 response = MESSAGES.manager_bus_saved
-                    .replace('{busID}', data.busID)
+                    .replace('{busID}', uniqueBusId) // Use system ID for next step instruction
+                    .replace('{busNumber}', data.busNumber)
+                    .replace('{busName}', data.busName)
                     .replace('{route}', data.route)
                     .replace('{departDate}', data.departDate)
                     .replace('{departTime}', data.departTime)
