@@ -69,7 +69,7 @@ Select an option from the menu below to get started. You can also type commands 
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
 
-  // Tracking
+  // Tracking (MESSAGES KEPT FOR CONTEXT)
   tracking_manager_prompt: "📍 *Live Tracking Setup:* Enter the Bus ID you wish to track/update (e.g., `BUS101`).",
   tracking_manager_enabled: "✅ *Tracking Enabled for {busID}*.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their *mobile location enabled*.\n2. The external Cron Job must be running.",
   tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
@@ -163,7 +163,7 @@ app.post('/api/webhook', async (req, res) => {
       } else if (callbackData === 'cb_add_bus_manager') {
         await handleManagerAddBus(chatId);
       } else if (callbackData === 'cb_start_tracking') { 
-        await handleManagerLiveTrackingSetup(chatId);
+        await sendMessage(chatId, MESSAGES.feature_wip + " Live Tracking management is temporarily disabled.");
       } else if (callbackData === 'cb_inventory_sync') { 
         await handleInventorySyncSetup(chatId);
       } else if (callbackData === 'cb_update_phone') { 
@@ -204,7 +204,8 @@ async function handleUserMessage(chatId, text, user) {
       } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
          await handleManagerInput(chatId, text, state);
       } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
-         await handleLiveTrackingSetupInput(chatId, text, state);
+         // Removed handleLiveTrackingSetupInput as the flow is disabled
+         await sendMessage(chatId, MESSAGES.feature_wip);
       } else if (state.state === 'AWAITING_NEW_PHONE') { 
          await handlePhoneUpdateInput(chatId, text);
       } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
@@ -245,7 +246,8 @@ async function handleUserMessage(chatId, text, user) {
     await handleAddSeatsCommand(chatId, text);
   }
   else if (textLower.startsWith('live tracking')) { 
-    await handleLiveTracking(chatId, text);
+    // Removed handleLiveTracking as the feature is disabled
+    await sendMessage(chatId, MESSAGES.feature_wip + " Live Tracking is currently disabled.");
   }
   else if (textLower === 'help' || textLower === '/help') {
     await sendHelpMessage(chatId);
@@ -281,8 +283,7 @@ async function sendHelpMessage(chatId) {
     if (userRole === 'manager' || userRole === 'owner') {
         baseButtons = [
             [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
-            [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }], // NEW BUTTON
-            [{ text: "📍 Start Tracking", callback_data: "cb_start_tracking" }], 
+            [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }], 
             [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
         ];
     } else {
@@ -1100,7 +1101,7 @@ async function handleManagerInput(chatId, text, state) {
                     });
                 }
 
-                // 3. Create Bus Document (using the generated ID)
+                // 3. Create Bus Document
                 await db.collection('buses').doc(uniqueBusId).set({
                     bus_id: uniqueBusId, // System-generated unique ID
                     bus_number: data.busNumber, // Manager's custom number

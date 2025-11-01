@@ -14,17 +14,5 @@
       "src": "/api/webhook",
       "dest": "index.js"
     }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/tracking",
-      "schedule": "0,15,30,45 * * * *"
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/api/cron/tracking",
-      "destination": "/api/tracker.js"
-    }
   ]
 }
