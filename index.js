@@ -7,7 +7,8 @@ const crypto = require('crypto');
 
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}`;
+// FIX: Ensure TELEGRAM_API path ends in a slash
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`; 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 // --- Razorpay Initialization ---
@@ -141,11 +142,12 @@ async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
         return; 
     }
     try {
-        const payload = { chat_id: chatId, text: text, parse_mode: parseMode };
+        // FIX: Ensure chatId is explicitly a string for JSON payload
+        const payload = { chat_id: String(chatId), text: text, parse_mode: parseMode };
         if (replyMarkup) payload.reply_markup = replyMarkup;
         
         // --- NEW: Enhanced logging for sendMessage failure ---
-        const response = await axios.post(`${TELEGRAM_API}/sendMessage`, payload);
+        const response = await axios.post(`${TELEGRAM_API}sendMessage`, payload);
         console.log(`[TELEGRAM] Message sent successfully to ${chatId}.`);
         // --- END NEW ---
     } catch (error) {
@@ -167,7 +169,7 @@ async function sendMessage(chatId, text, parseMode = null, replyMarkup = null) {
 
 async function sendChatAction(chatId, action) {
     try {
-        await axios.post(`${TELEGRAM_API}/sendChatAction`, { chat_id: chatId, action: action });
+        await axios.post(`${TELEGRAM_API}sendChatAction`, { chat_id: chatId, action: action });
     } catch (error) {
         if (error.response) {
             console.error(`❌ CRITICAL TELEGRAM ACTION ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
@@ -179,7 +181,7 @@ async function sendChatAction(chatId, action) {
 
 async function answerCallbackQuery(callbackQueryId) {
     try {
-        await axios.post(`${TELEGRAM_API}/answerCallbackQuery`, { callback_query_id: callbackQueryId });
+        await axios.post(`${TELEGRAM_API}answerCallbackQuery`, { callback_query_id: callbackQueryId });
     } catch (error) {
         // Suppress minor errors
     }
@@ -187,7 +189,7 @@ async function answerCallbackQuery(callbackQueryId) {
 
 async function editMessageReplyMarkup(chatId, messageId, replyMarkup) {
     try {
-        await axios.post(`${TELEGRAM_API}/editMessageReplyMarkup`, {
+        await axios.post(`${TELEGRAM_API}editMessageReplyMarkup`, {
             chat_id: chatId,
             message_id: messageId,
             reply_markup: replyMarkup
@@ -1152,7 +1154,7 @@ async function handleAddSeatsCommand(chatId, text) {
     
     const busID = match[1].toUpperCase();
     const count = parseInt(match[2], 10);
-    
+        
     if (count > 40 || count < 1) return await sendMessage(chatId, "❌ Seat count must be between 1 and 40.");
 
     try {
