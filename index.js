@@ -1572,7 +1572,12 @@ async function sendChatAction(chatId, action) {
     try {
         await axios.post(`${TELEGRAM_API}/sendChatAction`, { chat_id: chatId, action: action });
     } catch (error) {
-        // Suppress minor errors
+        // FIX: Critical log to capture immediate Telegram API failure
+        if (error.response) {
+            console.error(`❌ CRITICAL TELEGRAM ACTION ERROR for ${chatId}. Status: ${error.response.status}. Data: ${JSON.stringify(error.response.data)}`);
+        } else {
+            console.error(`❌ CRITICAL TELEGRAM ACTION NETWORK ERROR for ${chatId}: ${error.message}`);
+        }
     }
 }
 
