@@ -50,7 +50,12 @@ Select an option from the menu below to get started. You can also type commands 
   no_bookings: "📭 You don't have any active bookings.",
   booking_cancelled: "🗑️ *Booking Cancelled*\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of *{dateTime}*.", 
   
-  // Manager (UPDATED PROMPTS)
+  // Payment (NEW MESSAGES)
+  payment_required: "💰 *Payment Required:* Total Amount: ₹{amount} INR.\n\n[Click here to pay]({paymentUrl})\n\n*Type 'paid' after successful payment.*",
+  payment_awaiting: "⏳ Waiting for payment confirmation. Please type 'paid' after completing the transaction.",
+  payment_failed: "❌ Payment verification failed. Please try payment again or contact support.",
+
+  // Manager
   manager_add_bus_init: "📝 *Bus Creation:* Enter the **Bus Number** (e.g., `MH-12 AB 1234`):",
   manager_add_bus_number: "🚌 Enter the **Bus Name** (e.g., `Sharma Travels`):", // New Prompt
   manager_add_bus_route: "📍 Enter the Route (e.g., `Delhi to Jaipur`):",
@@ -60,7 +65,7 @@ Select an option from the menu below to get started. You can also type commands 
   manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., `08:30`):",
   manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., `18:00`):",
   manager_add_bus_manager_phone: "📞 *Final Step:* Enter your Phone Number to associate with the bus:",
-  manager_bus_saved: "✅ *Bus {busNumber} ({busName}) created!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
+  manager_bus_saved: "✅ *Bus {busID} created and tracking enabled!* Route: {route}. Departs: {departDate} at {departTime}. Arrives: {arriveTime}. \n\n*Next Step:* Now, add seats by typing:\n`add seats {busID} 40`",
   manager_seats_saved: "✅ *Seats Added!* 40 seats have been created for bus {busID} and marked available. You can now use `show seats {busID}`.",
   manager_seats_invalid: "❌ Invalid format. Please use: `add seats [BUSID] [COUNT]`",
 
