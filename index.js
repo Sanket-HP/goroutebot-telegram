@@ -2,7 +2,7 @@
 const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
-const Razorpay = require('razorpay'); // NEW: Import Razorpay
+const Razorpay = require('razorpay'); 
 const crypto = require('crypto'); // FIX: Added missing crypto import
 
 // --- Configuration ---
@@ -129,6 +129,7 @@ function getFirebaseDb() {
         
         // Get the Firestore instance (whether new or already existing)
         db = admin.firestore();
+        console.log("✅ Firebase DB initialized successfully."); // DEBUG LOG
         return db;
 
     } catch (e) {
@@ -271,6 +272,7 @@ function verifyRazorpaySignature(payload, signature) {
 /* --------------------- Message Router ---------------------- */
 
 async function handleUserMessage(chatId, text, user) {
+    console.log(`[DEBUG] Received message from ${chatId}: ${text}`); // DEBUG LOG
     const textLower = text.toLowerCase().trim();
 
     // --- STATE MANAGEMENT CHECK (Highest Priority) ---
@@ -534,15 +536,20 @@ async function handleCancellation(chatId, text) {
 }
 
 async function startUserRegistration(chatId, user) {
+    console.log(`[DEBUG] Entering startUserRegistration for ${chatId}`); // DEBUG LOG 1
     try {
         const db = getFirebaseDb();
+        
+        console.log(`[DEBUG] Attempting Firestore user check for ${chatId}`); // DEBUG LOG 2 (Before dangerous await)
         const doc = await db.collection('users').doc(String(chatId)).get();
+        console.log(`[DEBUG] Firestore user check complete. User exists: ${doc.exists}`); // DEBUG LOG 3 (After dangerous await)
+
 
         if (doc.exists) {
-             // FIX: Add safety check for user.first_name to prevent string replacement errors
-            const userName = user.first_name || 'User'; 
-                await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
-            await sendHelpMessage(chatId); 
+           // FIX: Add safety check for user.first_name to prevent string replacement errors
+           const userName = user.first_name || 'User'; 
+           await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
+           await sendHelpMessage(chatId); 
         } else {
             const keyboard = {
                 inline_keyboard: [
@@ -554,9 +561,10 @@ async function startUserRegistration(chatId, user) {
             await sendMessage(chatId, MESSAGES.prompt_role, "Markdown", keyboard);
         }
     } catch (error) {
-        console.error('❌ /start error:', error.message);
+        console.error(`❌ /start error for ${chatId}:`, error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
+    console.log(`[DEBUG] Exiting startUserRegistration for ${chatId}`); // DEBUG LOG 4
 }
 
 async function handleRoleSelection(chatId, user, callbackData) {
@@ -1002,7 +1010,7 @@ async function handleManagerLiveTrackingSetup(chatId) {
     try {
         const userRole = await getUserRole(chatId);
         if (userRole !== 'manager' && userRole !== 'owner') {
-              return await sendMessage(chatId, "❌ You do not have permission to enable live tracking.");
+             return await sendMessage(chatId, "❌ You do not have permission to enable live tracking.");
         }
         
         await saveAppState(chatId, 'MANAGER_LIVE_TRACKING_BUSID', {});
@@ -1085,7 +1093,7 @@ async function handleManagerAddBus(chatId) {
     try {
         const userRole = await getUserRole(chatId);
         if (userRole !== 'manager' && userRole !== 'owner') {
-              return await sendMessage(chatId, "❌ You do not have permission to add buses.");
+             return await sendMessage(chatId, "❌ You do not have permission to add buses.");
         }
         
         await saveAppState(chatId, 'MANAGER_ADD_BUS_NUMBER', {}); // Start with Bus Number prompt
