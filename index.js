@@ -941,10 +941,14 @@ async function handleSeatMap(chatId, text) {
             if (data.status === 'available') availableCount++;
         });
         
+        // --- Seat Map UI Generation ---
         let seatMap = `🚍 <b>Seat Map - ${busID}</b>\n`;
         seatMap += `📍 ${busInfo.from} → ${busInfo.to}\n`;
         seatMap += `📅 ${busInfo.date} 🕒 ${busInfo.time}\n\n`;
-        seatMap += `Legend: 🟩 Available • ⚫M Booked Male • ⚫F Booked Female\n\n`;
+        // Updated Legend with Emojis
+        seatMap += `Legend: ✅ Available • 🪑 Seater • 🛏️ Sleeper\n`;
+        seatMap += `⚫ Booked • 🚺 Female • 🚹 Male\n\n`;
+        seatMap += `<pre>--------------------------------------------------</pre>\n`;
 
         for (let row = 1; row <= 10; row++) {
             let line = '';
@@ -952,23 +956,34 @@ async function handleSeatMap(chatId, text) {
                 const seatNo = `${row}${col}`;
                 const data = seatStatus[seatNo] || {}; 
                 const status = data.status || '⬜'; 
+                const seatType = data.type || 'seater'; 
+                const gender = data.gender;
                 
-                let display = '⬜'; 
+                let icon = seatType.includes('sleeper') ? '🛏️' : '🪑';
+                let content = ``; 
+
                 if (status === 'available') {
-                    display = `🟩${seatNo}`;
+                    // Available: [SeatNo][Icon]✅
+                    content = `${seatNo.padEnd(3)} ${icon} ✅`;
                 } else if (status === 'booked' || status === 'locked') {
-                    const genderTag = data.gender === 'F' ? 'F' : 'M';
-                    display = `⚫${seatNo}${genderTag}`;
-                } 
+                    // Booked: [SeatNo][Icon][Gender]⚫
+                    const genderIcon = gender === 'F' ? '🚺' : '🚹';
+                    content = `${seatNo.padEnd(3)} ${icon}${genderIcon}⚫`; 
+                } else {
+                    // Unconfigured: [SeatNo]⬜
+                    content = `${seatNo.padEnd(3)} ⬜`; 
+                }
                 
-                line += `${display.padEnd(7)}`; 
+                // Use a fixed width string plus one space for separation
+                line += `${content.padEnd(10)}`; 
                 if (col === 'B') {
-                    line += `   🚌   `; 
+                    line += `  🚌  `; // Aisle spacer
                 } 
             }
-            seatMap += `<pre>${line}</pre>`; 
+            seatMap += `<pre>${line.trim()}</pre>\n`; 
         }
         
+        seatMap += `<pre>--------------------------------------------------</pre>\n`;
         seatMap += `\n📊 <b>${availableCount}</b> seats available / ${seatsSnapshot.size || 0}\n\n`;
         seatMap += `💡 <b>Book a seat:</b> "Book seat ${busID} 1A"`;
 
