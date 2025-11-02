@@ -805,6 +805,54 @@ async function handleShowMyTrips(chatId) {
     }
 }
 
+// --- FIX: Added Missing showSearchResults function ---
+async function showSearchResults(chatId, from, to, date) {
+    try {
+        const db = getFirebaseDb();
+        
+        const snapshot = await db.collection('buses')
+            .where('from', '==', from)
+            .where('to', '==', to)
+            .get(); 
+
+        const buses = [];
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            if (data.departure_time.startsWith(date)) {
+                 buses.push({
+                    busID: data.bus_id, from: data.from, to: data.to,
+                    date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
+                    owner: data.owner, price: data.price, busType: data.bus_type,
+                    rating: data.rating || 4.2, total_seats: data.total_seats || 40 
+                });
+            }
+        });
+
+        if (buses.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "HTML");
+
+        let response = MESSAGES.search_results.replace('{from}', from).replace('{to}', to).replace('{date}', date);
+        
+        for (const bus of buses) {
+            // Check available seats dynamically
+            const seatsSnapshot = await db.collection('seats').where('bus_id', '==', bus.busID).where('status', '==', 'available').get();
+            const availableSeats = seatsSnapshot.size;
+
+            response += `<b>${bus.busID}</b> - ${bus.owner}\n`;
+            response += `🕒 ${bus.time}\n`;
+            response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
+            response += `💺 ${availableSeats} seats available\n`;
+            response += `📋 "Show seats ${bus.busID}" to view seats\n\n`;
+        }
+        await sendMessage(chatId, response, "HTML");
+        
+    } catch (error) {
+        console.error('❌ Bus search results error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END FIX ---
+
+
 // --- NEW FIX: Missing handleSearchInputCallback definition ---
 async function handleSearchInputCallback(chatId, callbackData, state) {
     const db = getFirebaseDb();
