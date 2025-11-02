@@ -175,7 +175,8 @@ function getFirebaseDb() {
             throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
         }
         
-        const jsonString = Buffer.from(rawCredsBase64, 'base66').toString('utf8');
+        // FIX: Changed 'base66' to 'base64'
+        const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
         const serviceAccount = JSON.parse(jsonString);
 
         try {
