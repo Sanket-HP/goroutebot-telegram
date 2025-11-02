@@ -514,7 +514,8 @@ async function sendHelpMessage(chatId) {
                 [{ text: "📍 Start Route Tracking", callback_data: "cb_start_route_tracking_prompt" }],
                 [{ text: "📋 Show Manifest", callback_data: "cb_show_manifest_prompt" }],
                 [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
-                [{ text: Check-In/Release", callback_data: "cb_checkin_release_prompt"}]
+                // FIX: Corrected syntax error here: added quote and comma
+                [{ text: "Check-In/Release", callback_data: "cb_checkin_release_prompt"}] 
             );
         }
         
@@ -867,7 +868,7 @@ async function handleSeatMap(chatId, text) {
                 
                 const data = seatStatus[seatNo] || {};
                 const status = data.status || '⬜';
-                const typeIcon = seatType.includes('Sleeper') ? '🛏️' : '🪑';
+                const typeIcon = seatType.includes('Sleeper') ? '🛏️' : '💺';
                 let content = '';
                 
                 if (status === 'available') {
