@@ -64,7 +64,7 @@ Select an option from the menu below to get started. You can also type commands 
     payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
     session_cleared: "🧹 <b>Previous booking session cleared.</b> Your locked seats have been released.",
 
-    // Detailed Ticket Confirmation
+    // Detailed Ticket Confirmation (Used for Payment Success & Get Ticket)
     payment_confirmed_ticket: `✅ <b>Payment Confirmed & E-Ticket Issued!</b>
     
 🎫 <b>E-Ticket Details</b>
@@ -84,6 +84,12 @@ Order ID: {orderId}
 Amount Paid: ₹{amount} INR
 Time: {dateTime}
 `,
+    // Passenger Self-Service Messages
+    ticket_not_found: "❌ E-Ticket for Booking ID <b>{bookingId}</b> not found or not confirmed.",
+    booking_status_info: "📋 <b>Booking Status - {bookingId}</b>\n\nBus: {busID}\nSeats: {seats}\nStatus: <b>{status}</b>\nBooked On: {date}",
+    seat_change_invalid: "❌ Invalid format. Use: <pre>Request seat change BOOKID NEW_SEAT</pre>",
+    seat_change_wip: "🚧 Seat change request received for Booking <b>{bookingId}</b> (New seat: {newSeat}). This feature requires manager approval, and is currently pending implementation.",
+
 
     booking_details_error: "❌ <b>Error!</b> Please provide details in the format: <pre>[Name] / [Age] / [Aadhar Number]</pre>",
     seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
@@ -110,6 +116,19 @@ Time: {dateTime}
     manager_tracking_stopped: "⏹️ <b>Tracking Stopped for {busID}.</b> The journey status is now 'Arrived'.",
     tracking_not_tracking: "❌ Bus <b>{busID}</b> has not started tracking yet or the route is finished. Please check with the operator.",
     passenger_tracking_info: "🚍 <b>Live Tracking - {busID}</b>\n\n📍 <b>Last Location:</b> {location}\n🕒 <b>Last Updated:</b> {time}\n\n🔗 <b>Tracking Link:</b> <a href='{trackingUrl}?bus={busID}'>Tap here to see the live map</a>",
+
+    // Manager/Owner Trip/Staff Management
+    manager_list_trips: "🚌 <b>Your Active Trips:</b>\n\n{tripList}",
+    no_active_trips: "📭 You currently have no active or scheduled trips assigned.",
+    owner_manage_staff_prompt: "👑 <b>Staff Management:</b> Enter the Chat ID to assign/revoke a role:",
+    owner_staff_assigned: "✅ Chat ID <b>{chatId}</b> role updated to <b>manager</b>.",
+    owner_staff_revoked: "✅ Chat ID <b>{chatId}</b> role revoked (set to user).",
+    owner_invalid_format: "❌ Invalid format. Use: <pre>assign manager CHAT_ID</pre> or <pre>revoke manager CHAT_ID</pre>",
+    owner_permission_denied: "❌ Only Bus Owners can manage staff roles.",
+    
+    // Aadhar API Setup
+    aadhar_api_init: "🔒 <b>Aadhar Verification Setup:</b> Enter the verification API endpoint URL:",
+    aadhar_api_success: "✅ Aadhar API Endpoint set to: {url}",
 
     // Manager
     manager_add_bus_init: "📝 <b>Bus Creation:</b> Enter the <b>Bus Number</b> (e.g., <pre>MH-12 AB 1234</pre>):",
@@ -156,7 +175,7 @@ function getFirebaseDb() {
             throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
         }
         
-        const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
+        const jsonString = Buffer.from(rawCredsBase64, 'base66').toString('utf8');
         const serviceAccount = JSON.parse(jsonString);
 
         try {
@@ -347,15 +366,13 @@ async function sendLiveLocationUpdates() {
 
         const currentTime = new Date();
         const notificationTime = currentTime.toLocaleTimeString('en-IN');
-        // Added more mock locations to simulate journey progress
         const mockLocation = ["NH44 Checkpoint", "Toll Plaza 5", "Rest Area B", "City Outskirts", "Mid-route"];
         
         busesSnapshot.forEach(busDoc => {
             const data = busDoc.data();
             const busID = data.bus_id;
-            const managerId = data.manager_chat_id; // Use manager_chat_id for notification
+            const managerId = data.manager_chat_id;
             
-            // Generate a random mock location
             const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
 
             // Update the bus document with a new, mock location and time
@@ -423,21 +440,28 @@ async function sendHelpMessage(chatId) {
         
         let baseButtons = [];
 
-        if (userRole === 'manager' || userRole === 'owner') {
-            baseButtons = [
-                [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
-                [{ text: "📍 Start Route Tracking", callback_data: "cb_start_route_tracking_prompt" }], // NEW BUTTON
-                [{ text: "📋 Show Manifest", callback_data: "cb_show_manifest_prompt" }],
-                [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
-                [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
-            ];
-        } else {
-            baseButtons = [
-                [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
-                [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
-            ];
+        if (userRole === 'owner') {
+            baseButtons.push([{ text: "👑 Manage Staff", callback_data: "cb_owner_manage_staff" }]);
+            baseButtons.push([{ text: "🔒 Setup Aadhar API", callback_data: "cb_aadhar_api_setup" }]);
         }
         
+        if (userRole === 'manager' || userRole === 'owner') {
+            baseButtons.push(
+                [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+                [{ text: "🚌 Show My Trips", callback_data: "cb_show_my_trips" }],
+                [{ text: "📍 Start Route Tracking", callback_data: "cb_start_route_tracking_prompt" }],
+                [{ text: "📋 Show Manifest", callback_data: "cb_show_manifest_prompt" }],
+                [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
+            );
+        }
+        
+        if (userRole === 'user' || userRole === 'unregistered') {
+             baseButtons.push(
+                [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
+                [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }]
+            );
+        }
+
         let finalButtons = baseButtons;
         
         finalButtons.push([{ text: "📞 Update Phone", callback_data: "cb_update_phone" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }]);
@@ -453,6 +477,217 @@ async function sendHelpMessage(chatId) {
 }
 
 /* --------------------- General Handlers ---------------------- */
+
+// --- MANAGER/OWNER TRIP MANAGEMENT ---
+
+async function handleShowMyTrips(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+        return await sendMessage(chatId, "❌ You do not have permission to view trips.");
+    }
+
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('buses')
+            .where('manager_chat_id', '==', String(chatId))
+            .orderBy('departure_time')
+            .get();
+
+        if (snapshot.empty) {
+            return await sendMessage(chatId, MESSAGES.no_active_trips);
+        }
+
+        let tripList = '';
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            const date = data.departure_time.split(' ')[0];
+            tripList += `\n• <b>${data.bus_id}</b>: ${data.from} → ${data.to}\n`;
+            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
+        });
+
+        const response = MESSAGES.manager_list_trips.replace('{tripList}', tripList);
+        await sendMessage(chatId, response, "HTML");
+
+    } catch (e) {
+        console.error('❌ Show My Trips Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// --- OWNER STAFF MANAGEMENT ---
+
+async function handleStaffDelegation(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'owner') {
+        return await sendMessage(chatId, MESSAGES.owner_permission_denied);
+    }
+
+    const assignMatch = text.match(/assign manager\s+(\d+)/i);
+    const revokeMatch = text.match(/revoke manager\s+(\d+)/i);
+    const db = getFirebaseDb();
+
+    let targetChatId, newRole;
+
+    if (assignMatch) {
+        targetChatId = assignMatch[1];
+        newRole = 'manager';
+    } else if (revokeMatch) {
+        targetChatId = revokeMatch[1];
+        newRole = 'user';
+    } else {
+        return await sendMessage(chatId, MESSAGES.owner_invalid_format, "HTML");
+    }
+
+    try {
+        const targetRef = db.collection('users').doc(targetChatId);
+        const targetDoc = await targetRef.get();
+
+        if (!targetDoc.exists) {
+            return await sendMessage(chatId, `❌ User with Chat ID <b>${targetChatId}</b> is not registered.`);
+        }
+
+        await targetRef.update({ role: newRole });
+
+        if (newRole === 'manager') {
+            await sendMessage(chatId, MESSAGES.owner_staff_assigned.replace('{chatId}', targetChatId), "HTML");
+        } else {
+            await sendMessage(chatId, MESSAGES.owner_staff_revoked.replace('{chatId}', targetChatId), "HTML");
+        }
+
+    } catch (e) {
+        console.error('❌ Staff Delegation Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// --- MANAGER/OWNER AADHAR API SETUP ---
+
+async function handleAadharApiSetupInput(chatId, text) {
+    const urlRegex = /^(http|https):\/\/[^ "]+$/;
+    const db = getFirebaseDb();
+    
+    if (!text.match(urlRegex)) {
+        return await sendMessage(chatId, "❌ Invalid URL format. Try again:", "HTML");
+    }
+
+    try {
+        await db.collection('settings').doc('aadhar_verification').set({
+            endpoint_url: text.trim(),
+            updated_at: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.aadhar_api_success.replace('{url}', text.trim()), "HTML");
+    } catch (e) {
+        console.error('❌ Aadhar API Setup Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error + " Failed to save Aadhar API URL.");
+    }
+}
+
+// --- PASSENGER SELF-SERVICE ---
+
+async function handleGetTicket(chatId, text) {
+    const match = text.match(/get ticket\s+(BOOK\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Get ticket BOOK123</pre>", "HTML");
+
+    const bookingId = match[1].toUpperCase();
+
+    try {
+        const db = getFirebaseDb();
+        const bookingDoc = await db.collection('bookings').doc(bookingId).get();
+        
+        if (!bookingDoc.exists || bookingDoc.data().chat_id !== String(chatId) || bookingDoc.data().status !== 'confirmed') {
+            return await sendMessage(chatId, MESSAGES.ticket_not_found.replace('{bookingId}', bookingId), "HTML");
+        }
+
+        const booking = bookingDoc.data();
+        const userDoc = await db.collection('users').doc(String(chatId)).get();
+        const busDoc = await db.collection('buses').doc(booking.bus_id).get();
+
+        const userData = userDoc.exists ? userDoc.data() : {};
+        const busData = busDoc.exists ? busDoc.data() : {};
+        const dateTime = booking.created_at ? booking.created_at.toDate().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' }) : 'N/A';
+
+        const seatList = booking.seats.join(', ');
+        const [journeyDate, departTime] = (busData.departure_time || 'N/A N/A').split(' ');
+
+        const boardingPointsText = (busData.boarding_points && busData.boarding_points.length > 0)
+            ? busData.boarding_points.map(p => `• ${p.name} (${p.time})`).join('\n')
+            : 'N/A';
+
+        const ticketMessage = MESSAGES.payment_confirmed_ticket
+            .replace('{busName}', busData.bus_name || 'N/A')
+            .replace('{busType}', busData.bus_type || 'N/A')
+            .replace('{from}', busData.from || 'N/A')
+            .replace('{to}', busData.to || 'N/A')
+            .replace('{journeyDate}', journeyDate)
+            .replace('{departTime}', departTime)
+            .replace('{seatList}', seatList)
+            .replace('{boardingPoints}', boardingPointsText)
+            .replace('{name}', userData.name || 'N/A')
+            .replace('{phone}', userData.phone || 'N/A')
+            .replace('{orderId}', booking.razorpay_order_id || 'N/A')
+            .replace('{amount}', (booking.total_paid / 100).toFixed(2))
+            .replace('{dateTime}', dateTime);
+
+        await sendMessage(chatId, ticketMessage, "HTML");
+
+    } catch (e) {
+        console.error('❌ Get Ticket Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleCheckStatus(chatId, text) {
+    const match = text.match(/check status\s+(BOOK\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Check status BOOK123</pre>", "HTML");
+
+    const bookingId = match[1].toUpperCase();
+
+    try {
+        const db = getFirebaseDb();
+        const bookingDoc = await db.collection('bookings').doc(bookingId).get();
+        
+        if (!bookingDoc.exists || bookingDoc.data().chat_id !== String(chatId)) {
+            return await sendMessage(chatId, `❌ Booking ID <b>${bookingId}</b> not found.`);
+        }
+
+        const booking = bookingDoc.data();
+        const date = booking.created_at ? booking.created_at.toDate().toLocaleDateString('en-IN') : 'N/A';
+        const seatList = booking.seats.join(', ');
+
+        const response = MESSAGES.booking_status_info
+            .replace('{bookingId}', bookingId)
+            .replace('{busID}', booking.bus_id)
+            .replace('{seats}', seatList)
+            .replace('{status}', booking.status.toUpperCase())
+            .replace('{date}', date);
+
+        await sendMessage(chatId, response, "HTML");
+
+    } catch (e) {
+        console.error('❌ Check Status Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleSeatChangeRequest(chatId, text) {
+    const match = text.match(/request seat change\s+(BOOK\d+)\s+([A-Z0-9]+)/i);
+    if (!match) return await sendMessage(chatId, MESSAGES.seat_change_invalid, "HTML");
+
+    const bookingId = match[1].toUpperCase();
+    const newSeat = match[2].toUpperCase();
+    
+    // WIP Implementation: Just log and confirm request receipt
+    console.log(`[WIP] Seat change request: Booking ${bookingId} to seat ${newSeat}`);
+
+    // In a real implementation, you would:
+    // 1. Validate if the new seat is available and follows safety rules.
+    // 2. Create a document in a 'seat_change_requests' collection for manager review.
+
+    await sendMessage(chatId, MESSAGES.seat_change_wip.replace('{bookingId}', bookingId).replace('{newSeat}', newSeat), "HTML");
+}
+
 
 async function handleTrackingAction(chatId, action, busID) {
     const db = getFirebaseDb();
@@ -479,15 +714,14 @@ async function handleTrackingAction(chatId, action, busID) {
             .where('status', '==', 'confirmed')
             .get();
         
-        const trackingUrl = `${MOCK_TRACKING_BASE_URL}?bus=${busID}`;
-        const passengerMessage = `📢 <b>Bus Tracker Alert! Bus ${busID} is now DELAYED.</b>\n\nYour bus has departed and is now tracking live.\n\n🔗 <b>Live Map:</b> <a href='${trackingUrl}'>Track Bus ${busID} Here</a>\n\nEnjoy your trip!`;
+        const trackingUrl = MOCK_TRACKING_BASE_URL;
+        const passengerMessage = `📢 <b>Bus Tracker Alert! Bus ${busID} is now DELAYED.</b>\n\nYour bus has departed and is now tracking live.\n\n🔗 <b>Live Map:</b> <a href='${trackingUrl}?bus=${busID}'>Track Bus ${busID} Here</a>\n\nEnjoy your trip!`;
 
         const notificationPromises = [];
         const notifiedChats = new Set();
         
         bookingsSnapshot.forEach(doc => {
             const passengerChatId = doc.data().chat_id;
-            // Avoid sending multiple notifications if the same person has multiple bookings on the same bus
             if (!notifiedChats.has(passengerChatId)) {
                 notificationPromises.push(sendMessage(passengerChatId, passengerMessage, "HTML"));
                 notifiedChats.add(passengerChatId);
@@ -553,7 +787,6 @@ async function handlePassengerTracking(chatId, text) {
         const lastUpdateTime = busData.last_location_time ? 
             busData.last_location_time.toDate().toLocaleTimeString('en-IN') : 'N/A';
             
-        // Note: The MOCK_TRACKING_BASE_URL already contains the full path (e.g., .../index.html)
         const trackingUrl = MOCK_TRACKING_BASE_URL; 
 
         const response = MESSAGES.passenger_tracking_info
@@ -579,7 +812,6 @@ async function handleStartSearch(chatId) {
             inline_keyboard: suggestedCities.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
         };
 
-        // Removed 'available_cities' from state data, as validation is now done by route availability checks.
         await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 }); 
         await sendMessage(chatId, MESSAGES.search_from, "HTML", keyboard);
 
@@ -596,17 +828,15 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
     let response = '';
     let keyboard = null;
 
-    // Handle initial Source selection (step 1)
     if (state.state === 'AWAITING_SEARCH_FROM') {
         data.from = callbackData.replace('cb_search_from_', '');
         
-        // Dynamically suggest popular destinations from the selected city
         const snapshot = await db.collection('buses').where('from', '==', data.from).get();
         const availableDestinations = new Set();
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
 
         const dests = Array.from(availableDestinations).sort();
-        const suggestedDests = dests.slice(0, 6); // Suggest up to 6 destinations
+        const suggestedDests = dests.slice(0, 6);
 
         keyboard = {
             inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
@@ -620,7 +850,6 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
         
-    // Handle Destination selection (step 2)
     } else if (state.state === 'AWAITING_SEARCH_TO') {
         data.to = callbackData.replace('cb_search_to_', '');
 
@@ -634,7 +863,6 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
         nextState = 'AWAITING_SEARCH_DATE';
         response = MESSAGES.search_date;
 
-    // Handle Date selection (step 3)
     } else if (state.state === 'AWAITING_SEARCH_DATE') {
         data.dateType = callbackData.replace('cb_search_date_', '');
         let targetDate;
@@ -680,7 +908,6 @@ async function handleSearchTextInput(chatId, text, state) {
 
         if (dests.length === 0) {
              await saveAppState(chatId, 'IDLE', {});
-             // Check against DB routes instead of fixed city list
              return await sendMessage(chatId, MESSAGES.search_route_not_found.replace('{city}', cityName), "HTML");
         }
         
@@ -690,7 +917,6 @@ async function handleSearchTextInput(chatId, text, state) {
     } else if (state.state === 'AWAITING_SEARCH_TO') {
         state.data.to = cityName;
 
-        // Final check to see if a route exists before showing dates
         const db = getFirebaseDb();
         const snapshot = await db.collection('buses')
             .where('from', '==', state.data.from)
@@ -1787,14 +2013,14 @@ async function handleUserMessage(chatId, text, user) {
 
     if (state.state !== 'IDLE') {
         if (state.state === 'AWAITING_SEARCH_FROM' || state.state === 'AWAITING_SEARCH_TO') {
-             // NEW: Handle text input for searching cities
              await handleSearchTextInput(chatId, text, state);
         } else if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
             await handleBookingInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_ADD_BUS') || state.state.startsWith('MANAGER_ADD_SEAT')) {
             await handleManagerInput(chatId, text, state);
+        } else if (state.state.startsWith('MANAGER_AADHAR_API_SETUP')) { // NEW AADHAR FLOW
+            await handleAadharApiSetupInput(chatId, text);
         } else if (state.state.startsWith('MANAGER_AWAITING_LIVE_ACTION')) { 
-            // Manager is in a tracking session and sent a text message (likely a mistake)
             const busID = state.data.busID;
              const keyboard = {
                 inline_keyboard: [
@@ -1808,7 +2034,6 @@ async function handleUserMessage(chatId, text, user) {
         } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
             await handleInventorySyncInput(chatId, text, state);
         } else if (state.state === 'AWAITING_PAYMENT') {
-            // User sent a message while waiting for payment, re-send the payment prompt with buttons
             const keyboard = {
                 inline_keyboard: [
                     [{ text: "✅ I have Paid (Confirm)", callback_data: "cb_payment_confirm" }],
@@ -1822,7 +2047,23 @@ async function handleUserMessage(chatId, text, user) {
     }
 
     // --- STANDARD COMMANDS (IDLE state) ---
-    if (textLower.startsWith('my profile details')) {
+    
+    // OWNER STAFF COMMANDS
+    if (textLower.startsWith('assign manager') || textLower.startsWith('revoke manager')) {
+        await handleStaffDelegation(chatId, text);
+    }
+    // PASSENGER SELF-SERVICE COMMANDS
+    else if (textLower.startsWith('get ticket')) {
+        await handleGetTicket(chatId, text);
+    }
+    else if (textLower.startsWith('check status')) {
+        await handleCheckStatus(chatId, text);
+    }
+    else if (textLower.startsWith('request seat change')) { // WIP
+        await handleSeatChangeRequest(chatId, text);
+    }
+    // GENERAL COMMANDS
+    else if (textLower.startsWith('my profile details')) {
         await handleProfileUpdate(chatId, text);
     }
     else if (textLower === 'book bus' || textLower === '/book') {
@@ -1846,10 +2087,10 @@ async function handleUserMessage(chatId, text, user) {
     else if (textLower.startsWith('show manifest')) {
         await handleShowManifest(chatId, text);
     }
-    else if (textLower.startsWith('start tracking')) { // NEW MANAGER COMMAND
+    else if (textLower.startsWith('start tracking')) { 
         await handleStartTrackingCommand(chatId, text);
     }
-    else if (textLower.startsWith('track bus')) { // NEW PASSENGER COMMAND
+    else if (textLower.startsWith('track bus')) { 
         await handlePassengerTracking(chatId, text);
     }
     else { 
@@ -1890,7 +2131,7 @@ app.post('/api/webhook', async (req, res) => {
             const messageId = callback.message.message_id;
             
             await answerCallbackQuery(callback.id);
-            // Delete the keyboard once a button is clicked
+            // Delete the keyboard unless it's a search step or tracking action (which need to persist/re-render)
             if (!callbackData.startsWith('cb_search_') && !callbackData.startsWith('cb_live_action_')) {
                 await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
             }
@@ -1924,6 +2165,17 @@ app.post('/api/webhook', async (req, res) => {
                 await handleManagerAddBus(chatId);
             } else if (callbackData === 'cb_inventory_sync') { 
                 await handleInventorySyncSetup(chatId);
+            } else if (callbackData === 'cb_aadhar_api_setup') { // NEW AADHAR API INIT
+                const userRole = await getUserRole(chatId);
+                if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, "❌ Permission denied.");
+                await saveAppState(chatId, 'MANAGER_AADHAR_API_SETUP', {});
+                await sendMessage(chatId, MESSAGES.aadhar_api_init, "HTML");
+            } else if (callbackData === 'cb_owner_manage_staff') {
+                 const userRole = await getUserRole(chatId);
+                 if (userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
+                 await sendMessage(chatId, MESSAGES.owner_manage_staff_prompt, "HTML");
+            } else if (callbackData === 'cb_show_my_trips') { // NEW TRIP LIST
+                await handleShowMyTrips(chatId);
             } else if (callbackData === 'cb_update_phone') { 
                 await handleUpdatePhoneNumberCallback(chatId);
             } else if (callbackData.startsWith('cb_select_gender_')) { 
@@ -1944,9 +2196,9 @@ app.post('/api/webhook', async (req, res) => {
                 await sendMessage(chatId, "📋 Please send the manifest command with the Bus ID.\nExample: <pre>Show manifest BUS101</pre>", "HTML");
             } else if (callbackData === 'cb_start_route_tracking_prompt') { 
                 await sendMessage(chatId, MESSAGES.manager_tracking_prompt, "HTML");
-            } else if (callbackData.startsWith('cb_live_action_')) { // NEW MANAGER LIVE ACTION HANDLER
+            } else if (callbackData.startsWith('cb_live_action_')) {
                 const parts = callbackData.split('_');
-                const action = parts[2]; // 'start' or 'stop'
+                const action = parts[2]; 
                 const busID = parts[3];
                 await handleTrackingAction(chatId, action, busID);
             }
