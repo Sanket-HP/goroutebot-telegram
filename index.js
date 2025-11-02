@@ -10,6 +10,14 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`; 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
+// --- Predefined City List (For Search Feature) ---
+const MAJOR_CITIES = [
+    'Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur', // Maharashtra
+    'Panaji', 'Margao', // Goa
+    'Bengaluru', // Karnataka
+    'Hyderabad' // Telangana
+].sort();
+
 // --- Razorpay Initialization ---
 const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID,
@@ -80,8 +88,9 @@ Time: {dateTime}
     booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.", 
     
     // NEW SEARCH MESSAGES
-    search_from: "🗺️ <b>Travel From:</b> Please select your source city:",
-    search_to: "➡️ <b>Travel To:</b> Please select your destination city:",
+    search_from: "🗺️ <b>Travel From:</b> Select a city below, or <b>type the full name of your city</b> to search:",
+    search_to: "➡️ <b>Travel To:</b> Select a city below, or <b>type the full name of your city</b> to search:",
+    search_city_invalid: "❌ City not found. Please ensure you type the full city name correctly (e.g., 'Pune'). Try again:",
     search_date: "📅 <b>Travel Date:</b> When do you plan to travel?",
     search_results: "🚌 <b>Search Results ({from} to {to}, {date})</b> 🚌\n\n",
     
@@ -256,11 +265,9 @@ async function unlockSeats(booking) {
     try {
         const db = getFirebaseDb();
         const batch = db.batch();
-        // Check if booking has seats property and it's an array before iterating
         if (booking && booking.seats && Array.isArray(booking.seats)) {
              booking.seats.forEach(seat => {
                 const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
-                // Use set with merge true to ensure fields are deleted even if document doesn't exist
                 batch.set(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() }, { merge: true });
             });
         }
@@ -293,7 +300,6 @@ async function getBusInfo(busID) {
 async function sendManagerNotification(busID, type, details) {
     try {
         const db = getFirebaseDb();
-        // Use busID as the document ID for 'buses' collection (assuming this is the structure)
         const busDoc = await db.collection('buses').doc(busID).get(); 
         
         if (!busDoc.exists || !busDoc.data().manager_chat_id) return; 
@@ -436,32 +442,16 @@ async function sendHelpMessage(chatId) {
 
 /* --------------------- General Handlers ---------------------- */
 
-async function getUniqueLocations() {
-    const db = getFirebaseDb();
-    const snapshot = await db.collection('buses').get();
-    const sources = new Set();
-    const destinations = new Set();
-
-    snapshot.forEach(doc => {
-        const data = doc.data();
-        if (data.from) sources.add(data.from);
-        if (data.to) destinations.add(data.to);
-    });
-
-    return { sources: Array.from(sources).sort(), destinations: Array.from(destinations).sort() };
-}
-
 async function handleStartSearch(chatId) {
     try {
-        const locations = await getUniqueLocations();
-        
-        if (locations.sources.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "HTML");
+        // Use a subset of major cities for initial button suggestions
+        const suggestedCities = MAJOR_CITIES.slice(0, 6); 
         
         const keyboard = {
-            inline_keyboard: locations.sources.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
+            inline_keyboard: suggestedCities.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
         };
 
-        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', {});
+        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1, available_cities: MAJOR_CITIES });
         await sendMessage(chatId, MESSAGES.search_from, "HTML", keyboard);
 
     } catch (e) {
@@ -477,26 +467,31 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
     let response = '';
     let keyboard = null;
 
+    // Handle initial Source selection (step 1)
     if (state.state === 'AWAITING_SEARCH_FROM') {
-        const from = callbackData.replace('cb_search_from_', '');
-        data.from = from;
+        data.from = callbackData.replace('cb_search_from_', '');
         
-        const snapshot = await db.collection('buses').where('from', '==', from).get();
+        const snapshot = await db.collection('buses').where('from', '==', data.from).get();
         const availableDestinations = new Set();
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
 
+        const dests = Array.from(availableDestinations).sort();
+        const suggestedDests = dests.slice(0, 6); // Suggest up to 6 destinations
+
         keyboard = {
-            inline_keyboard: Array.from(availableDestinations).map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
+            inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
         };
 
-        if (Array.from(availableDestinations).length === 0) {
+        if (dests.length === 0) {
              await saveAppState(chatId, 'IDLE', {});
-             return await sendMessage(chatId, `❌ No destinations available from <b>${from}</b>.`, "HTML");
+             return await sendMessage(chatId, `❌ No destinations available from <b>${data.from}</b>.`, "HTML");
         }
-
+        
+        data.available_cities = dests; // Update city list for the next step (text search)
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
         
+    // Handle Destination selection (step 2)
     } else if (state.state === 'AWAITING_SEARCH_TO') {
         data.to = callbackData.replace('cb_search_to_', '');
 
@@ -510,6 +505,7 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
         nextState = 'AWAITING_SEARCH_DATE';
         response = MESSAGES.search_date;
 
+    // Handle Date selection (step 3)
     } else if (state.state === 'AWAITING_SEARCH_DATE') {
         data.dateType = callbackData.replace('cb_search_date_', '');
         let targetDate;
@@ -526,15 +522,65 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
         }
         
         data.date = targetDate;
-        await saveAppState(chatId, 'IDLE', {}); // Reset state before showing results
+        await saveAppState(chatId, 'IDLE', {}); 
         
-        // Final action: show results
         return await showSearchResults(chatId, data.from, data.to, data.date);
     }
 
     await saveAppState(chatId, nextState, data);
     await sendMessage(chatId, response, "HTML", keyboard);
 }
+
+async function handleSearchTextInput(chatId, text, state) {
+    const cityName = text.trim();
+    const cityList = state.data.available_cities || MAJOR_CITIES;
+    
+    // Check if the input city is a valid major city
+    if (!cityList.includes(cityName)) {
+        return await sendMessage(chatId, MESSAGES.search_city_invalid, "HTML");
+    }
+
+    if (state.state === 'AWAITING_SEARCH_FROM') {
+        // If valid city, jump to Destination selection
+        state.data.from = cityName;
+        
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('buses').where('from', '==', cityName).get();
+        const availableDestinations = new Set();
+        snapshot.forEach(doc => availableDestinations.add(doc.data().to));
+
+        const dests = Array.from(availableDestinations).sort();
+        const suggestedDests = dests.slice(0, 6);
+
+        const keyboard = {
+            inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
+        };
+
+        if (dests.length === 0) {
+             await saveAppState(chatId, 'IDLE', {});
+             return await sendMessage(chatId, `❌ No destinations available from <b>${cityName}</b>.`, "HTML");
+        }
+        
+        state.data.available_cities = dests; 
+        await saveAppState(chatId, 'AWAITING_SEARCH_TO', state.data);
+        await sendMessage(chatId, MESSAGES.search_to, "HTML", keyboard);
+
+    } else if (state.state === 'AWAITING_SEARCH_TO') {
+        // If valid city, jump to Date selection
+        state.data.to = cityName;
+
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "📅 Today", callback_data: `cb_search_date_today` }],
+                [{ text: "➡️ Tomorrow", callback_data: `cb_search_date_tomorrow` }],
+                [{ text: "🗓️ Pick Specific Date (WIP)", callback_data: `cb_search_date_specific` }],
+            ]
+        };
+        await saveAppState(chatId, 'AWAITING_SEARCH_DATE', state.data);
+        await sendMessage(chatId, MESSAGES.search_date, "HTML", keyboard);
+    }
+}
+
 
 async function showSearchResults(chatId, from, to, date) {
     try {
@@ -668,7 +714,6 @@ async function handlePhoneUpdateInput(chatId, text) {
 }
 
 async function handleBusSearch(chatId) {
-    // This function is now the entry point for the guided search
     await handleStartSearch(chatId);
 }
 
@@ -1366,7 +1411,9 @@ async function handleManagerInput(chatId, text, state) {
                         await db.collection('users').doc(String(chatId)).update({ phone: data.managerPhone });
                     }
                     
-                    const [from, to] = data.route.split(' to ').map(s => s.trim());
+                    const routeParts = data.route.split(' to ').map(s => s.trim());
+                    const from = routeParts[0] || 'Unknown';
+                    const to = routeParts.length > 1 ? routeParts[1] : 'Unknown';
                     
                     await db.collection('buses').doc(data.uniqueBusId).set({
                         bus_id: data.uniqueBusId,
@@ -1586,9 +1633,12 @@ async function handleUserMessage(chatId, text, user) {
     }
 
     if (state.state !== 'IDLE') {
-        if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
+        if (state.state === 'AWAITING_SEARCH_FROM' || state.state === 'AWAITING_SEARCH_TO') {
+             // NEW: Handle text input for searching cities
+             await handleSearchTextInput(chatId, text, state);
+        } else if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
             await handleBookingInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_ADD_BUS')) {
+        } else if (state.state.startsWith('MANAGER_ADD_BUS') || state.state.startsWith('MANAGER_ADD_SEAT')) {
             await handleManagerInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
             await sendMessage(chatId, MESSAGES.feature_wip);
@@ -1688,7 +1738,7 @@ app.post('/api/webhook', async (req, res) => {
             // --- ROUTE CALLBACKS ---
             if (callbackData.startsWith('cb_register_role_')) {
                 await handleRoleSelection(chatId, callback.from, callbackData);
-            } else if (callbackData.startsWith('cb_search_')) {
+            } else if (callbackData.startsWith('cb_search_from_') || callbackData.startsWith('cb_search_to_') || callbackData.startsWith('cb_search_date_')) {
                  await handleSearchInputCallback(chatId, callbackData, state);
             } else if (callbackData === 'cb_payment_confirm') { 
                 if (state.state === 'AWAITING_PAYMENT') {
@@ -1701,7 +1751,7 @@ app.post('/api/webhook', async (req, res) => {
             } else if (callbackData === 'cb_book_bus') {
                 await handleBusSearch(chatId);
             } else if (callbackData === 'cb_booking_single') {
-                await handleBusSearch(chatId); // Reroute to smart search flow
+                await handleBusSearch(chatId); 
             } else if (callbackData === 'cb_my_booking') {
                 await handleBookingInfo(chatId);
             } else if (callbackData === 'cb_my_profile') {
