@@ -105,9 +105,11 @@ Time: {dateTime}
 
     // NEW TRACKING MESSAGES
     manager_tracking_prompt: "📍 <b>Start Tracking:</b> Enter the Bus ID that is now departing (e.g., <pre>BUS101</pre>):",
-    manager_tracking_started: "✅ <b>Tracking Active for {busID}!</b> The bus status is now 'Departed'.\n\nAll booked passengers on this route have been notified with the tracking link.",
+    manager_tracking_session_active: "🚌 <b>Bus {busID} Tracking Session Active.</b> Select an action below:",
+    manager_tracking_started: "✅ <b>LIVE Location Sharing Started for {busID}!</b>\n\nPassengers have been notified. Click 'Stop Tracking' when the journey is complete.",
+    manager_tracking_stopped: "⏹️ <b>Tracking Stopped for {busID}.</b> The journey status is now 'Arrived'.",
     tracking_not_tracking: "❌ Bus <b>{busID}</b> has not started tracking yet or the route is finished. Please check with the operator.",
-    passenger_tracking_info: "🚍 <b>Live Tracking - {busID}</b>\n\n📍 <b>Last Location:</b> {location}\n🕒 <b>Last Updated:</b> {time}\n\n🔗 <b>Tracking Link:</b> <a href='{trackingUrl}'>Tap here to see the live map</a>",
+    passenger_tracking_info: "🚍 <b>Live Tracking - {busID}</b>\n\n📍 <b>Last Location:</b> {location}\n🕒 <b>Last Updated:</b> {time}\n\n🔗 <b>Tracking Link:</b> <a href='{trackingUrl}?bus={busID}'>Tap here to see the live map</a>",
 
     // Manager
     manager_add_bus_init: "📝 <b>Bus Creation:</b> Enter the <b>Bus Number</b> (e.g., <pre>MH-12 AB 1234</pre>):",
@@ -128,16 +130,6 @@ Time: {dateTime}
     manager_seats_invalid: "❌ Invalid format. Please use: <pre>add seats [BUSID] [COUNT]</pre>",
     manager_invalid_layout: "❌ Invalid layout. Please enter <pre>Seater</pre>, <pre>Sleeper</pre>, or <pre>Both</pre>.",
     manager_invalid_seat_type: "❌ Invalid seat type. Please enter <pre>Sleeper Upper</pre>, <pre>Sleeper Lower</pre>, or <pre>Seater</pre>.",
-
-    // Tracking
-    tracking_manager_prompt: "📍 <b>Live Tracking Setup:</b> Enter the Bus ID you wish to track/update (e.g., <pre>BUS101</pre>).",
-    tracking_manager_enabled: "✅ <b>Tracking Enabled for {busID}</b>.\n\nTo update the location every 15 minutes, the manager must:\n1. Keep their <i>mobile location enabled</i>.\n2. The external Cron Job must be running.",
-    tracking_not_found: "❌ Bus {busID} not found or tracking is not active.",
-    tracking_passenger_info: "🚍 <b>Live Tracking - {busID}</b>\n\n📍 <b>Last Location:</b> {location}\n🕒 <b>Last Updated:</b> {time}\n\n<i>Note: Location updates every 15 minutes</i>",
-
-    // Notifications
-    manager_notification_booking: "🔔 <b>NEW BOOKING CONFIRMED!</b>\n\nBus: {busID}\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}",
-    manager_notification_cancellation: "⚠️ <b>BOOKING CANCELLED</b>\n\nBooking ID: {bookingId}\nBus: {busID}\nSeats: {seats}\nTime: {dateTime}",
 
     // General
     db_error: "❌ CRITICAL ERROR: The bot's database is not connected. Please contact support.",
@@ -367,6 +359,7 @@ async function sendLiveLocationUpdates() {
             const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
 
             // Update the bus document with a new, mock location and time
+            // NOTE: In a real system, you would update latitude and longitude here.
             busDoc.ref.update({
                 last_location_time: admin.firestore.FieldValue.serverTimestamp(),
                 last_location_name: randomLocation
@@ -378,14 +371,11 @@ async function sendLiveLocationUpdates() {
                     .replace('{busID}', busID)
                     .replace('{location}', randomLocation)
                     .replace('{time}', notificationTime)
-                    .replace('{trackingUrl}', `${MOCK_TRACKING_BASE_URL}?bus=${busID}`);
+                    .replace('{trackingUrl}', MOCK_TRACKING_BASE_URL);
                 
                 updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "HTML"));
                 updatesSent++;
             }
-            
-            // 2. NOTE: In a production system, you would query the 'bookings' collection here
-            // to find and notify every passenger of this bus. (Left as note as requested)
         });
 
         await Promise.all(updates);
@@ -464,6 +454,63 @@ async function sendHelpMessage(chatId) {
 
 /* --------------------- General Handlers ---------------------- */
 
+async function handleTrackingAction(chatId, action, busID) {
+    const db = getFirebaseDb();
+    const busRef = db.collection('buses').doc(busID);
+    const busDoc = await busRef.get();
+
+    if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`, "HTML");
+    const busData = busDoc.data();
+
+    if (action === 'start') {
+        // 1. Update Bus Status to departed and activate tracking
+        await busRef.update({ 
+            is_tracking: true,
+            status: 'departed',
+            last_location_name: busData.from,
+            last_location_time: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        await saveAppState(chatId, 'MANAGER_AWAITING_LIVE_ACTION', { busID: busID });
+
+        // 2. Notify all confirmed passengers for this route
+        const bookingsSnapshot = await db.collection('bookings')
+            .where('bus_id', '==', busID)
+            .where('status', '==', 'confirmed')
+            .get();
+        
+        const trackingUrl = `${MOCK_TRACKING_BASE_URL}?bus=${busID}`;
+        const passengerMessage = `📢 <b>Bus Tracker Alert! Bus ${busID} is now DELAYED.</b>\n\nYour bus has departed and is now tracking live.\n\n🔗 <b>Live Map:</b> <a href='${trackingUrl}'>Track Bus ${busID} Here</a>\n\nEnjoy your trip!`;
+
+        const notificationPromises = [];
+        const notifiedChats = new Set();
+        
+        bookingsSnapshot.forEach(doc => {
+            const passengerChatId = doc.data().chat_id;
+            // Avoid sending multiple notifications if the same person has multiple bookings on the same bus
+            if (!notifiedChats.has(passengerChatId)) {
+                notificationPromises.push(sendMessage(passengerChatId, passengerMessage, "HTML"));
+                notifiedChats.add(passengerChatId);
+            }
+        });
+        
+        await Promise.all(notificationPromises);
+
+        await sendMessage(chatId, MESSAGES.manager_tracking_started.replace('{busID}', busID), "HTML");
+
+
+    } else if (action === 'stop') {
+        // 1. Update Bus Status to arrived and deactivate tracking
+        await busRef.update({ 
+            is_tracking: false,
+            status: 'arrived',
+        });
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.manager_tracking_stopped.replace('{busID}', busID), "HTML");
+    }
+}
+
+
 async function handleStartTrackingCommand(chatId, text) {
     const match = text.match(/start tracking\s+(BUS\d+)/i);
     if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID.\nExample: <pre>Start tracking BUS101</pre>", "HTML");
@@ -475,31 +522,17 @@ async function handleStartTrackingCommand(chatId, text) {
         return await sendMessage(chatId, "❌ You do not have permission to start tracking.");
     }
 
-    try {
-        const db = getFirebaseDb();
-        const busRef = db.collection('buses').doc(busID);
-        const busDoc = await busRef.get();
+    // Set state to await button action
+    await saveAppState(chatId, 'MANAGER_AWAITING_LIVE_ACTION', { busID: busID });
 
-        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`);
-
-        // 1. Update Bus Status to departed and activate tracking
-        await busRef.update({ 
-            is_tracking: true,
-            status: 'departed',
-            manager_chat_id: String(chatId), // Ensure manager is linked for cron notifications
-            last_location_name: busDoc.data().from, // Start location is 'from' city
-            last_location_time: admin.firestore.FieldValue.serverTimestamp()
-        });
-
-        await sendMessage(chatId, MESSAGES.manager_tracking_started.replace('{busID}', busID), "HTML");
-        
-        // 2. SIMULATE sending tracking link to all booked passengers (as requested by user logic)
-        // In a full app, we would query the 'bookings' collection here and send the link to each passenger's chat_id.
-
-    } catch (e) {
-        console.error('❌ Start Tracking Error:', e.message);
-        await sendMessage(chatId, MESSAGES.db_error);
-    }
+    const keyboard = {
+        inline_keyboard: [
+            [{ text: "📍 Share Live Location", callback_data: `cb_live_action_start_${busID}` }],
+            [{ text: "⏹️ Stop Tracking", callback_data: `cb_live_action_stop_${busID}` }]
+        ]
+    };
+    
+    await sendMessage(chatId, MESSAGES.manager_tracking_session_active.replace('{busID}', busID), "HTML", keyboard);
 }
 
 async function handlePassengerTracking(chatId, text) {
@@ -520,7 +553,8 @@ async function handlePassengerTracking(chatId, text) {
         const lastUpdateTime = busData.last_location_time ? 
             busData.last_location_time.toDate().toLocaleTimeString('en-IN') : 'N/A';
             
-        const trackingUrl = `${MOCK_TRACKING_BASE_URL}?bus=${busID}`; // Mock URL
+        // Note: The MOCK_TRACKING_BASE_URL already contains the full path (e.g., .../index.html)
+        const trackingUrl = MOCK_TRACKING_BASE_URL; 
 
         const response = MESSAGES.passenger_tracking_info
             .replace('{busID}', busID)
@@ -1549,7 +1583,7 @@ async function handleManagerInput(chatId, text, state) {
                         total_seats: 40,
                         rating: 5.0,
                         status: 'scheduled',
-                        is_tracking: false, // NEW: Tracking is off by default
+                        is_tracking: false, // Tracking is off by default
                         last_location_name: from,
                         last_location_time: admin.firestore.FieldValue.serverTimestamp()
                     });
@@ -1759,8 +1793,16 @@ async function handleUserMessage(chatId, text, user) {
             await handleBookingInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_ADD_BUS') || state.state.startsWith('MANAGER_ADD_SEAT')) {
             await handleManagerInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_LIVE_TRACKING')) { 
-            await sendMessage(chatId, MESSAGES.feature_wip);
+        } else if (state.state.startsWith('MANAGER_AWAITING_LIVE_ACTION')) { 
+            // Manager is in a tracking session and sent a text message (likely a mistake)
+            const busID = state.data.busID;
+             const keyboard = {
+                inline_keyboard: [
+                    [{ text: "📍 Share Live Location", callback_data: `cb_live_action_start_${busID}` }],
+                    [{ text: "⏹️ Stop Tracking", callback_data: `cb_live_action_stop_${busID}` }]
+                ]
+            };
+            await sendMessage(chatId, MESSAGES.manager_tracking_session_active.replace('{busID}', busID) + "\n\nPlease use the buttons below to control the session.", "HTML", keyboard);
         } else if (state.state === 'AWAITING_NEW_PHONE') { 
             await handlePhoneUpdateInput(chatId, text);
         } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
@@ -1849,7 +1891,7 @@ app.post('/api/webhook', async (req, res) => {
             
             await answerCallbackQuery(callback.id);
             // Delete the keyboard once a button is clicked
-            if (!callbackData.startsWith('cb_search_')) {
+            if (!callbackData.startsWith('cb_search_') && !callbackData.startsWith('cb_live_action_')) {
                 await editMessageReplyMarkup(chatId, messageId, { inline_keyboard: [] });
             }
 
@@ -1900,8 +1942,13 @@ app.post('/api/webhook', async (req, res) => {
                 await sendMessage(chatId, MESSAGES.feature_wip);
             } else if (callbackData === 'cb_show_manifest_prompt') {
                 await sendMessage(chatId, "📋 Please send the manifest command with the Bus ID.\nExample: <pre>Show manifest BUS101</pre>", "HTML");
-            } else if (callbackData === 'cb_start_route_tracking_prompt') { // NEW MANAGER CALLBACK
+            } else if (callbackData === 'cb_start_route_tracking_prompt') { 
                 await sendMessage(chatId, MESSAGES.manager_tracking_prompt, "HTML");
+            } else if (callbackData.startsWith('cb_live_action_')) { // NEW MANAGER LIVE ACTION HANDLER
+                const parts = callbackData.split('_');
+                const action = parts[2]; // 'start' or 'stop'
+                const busID = parts[3];
+                await handleTrackingAction(chatId, action, busID);
             }
         }
     } catch (error) {
