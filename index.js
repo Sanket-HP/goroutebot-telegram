@@ -542,7 +542,7 @@ async function sendHelpMessage(chatId) {
 
 /* --------------------- General Handlers ---------------------- */
 
-// --- FIX: Definition for starting the guided search flow ---
+// --- FIX: Definition for starting the guided search flow (Required by handleBusSearch) ---
 async function handleStartSearch(chatId) {
     try {
         // Use a subset of major cities for initial button suggestions
@@ -805,7 +805,78 @@ async function handleShowMyTrips(chatId) {
     }
 }
 
-// ... (Rest of existing handlers)
+// --- NEW FIX: Missing handleSearchInputCallback definition ---
+async function handleSearchInputCallback(chatId, callbackData, state) {
+    const db = getFirebaseDb();
+    let data = state.data;
+    let nextState = '';
+    let response = '';
+    let keyboard = null;
+
+    // Handle initial Source selection (step 1)
+    if (state.state === 'AWAITING_SEARCH_FROM') {
+        data.from = callbackData.replace('cb_search_from_', '');
+        
+        // Dynamically suggest popular destinations from the selected city
+        const snapshot = await db.collection('buses').where('from', '==', data.from).get();
+        const availableDestinations = new Set();
+        snapshot.forEach(doc => availableDestinations.add(doc.data().to));
+
+        const dests = Array.from(availableDestinations).sort();
+        const suggestedDests = dests.slice(0, 6); // Suggest up to 6 destinations
+
+        keyboard = {
+            inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
+        };
+
+        if (dests.length === 0) {
+            await saveAppState(chatId, 'IDLE', {});
+            return await sendMessage(chatId, `❌ No destinations currently scheduled from <b>${data.from}</b>.`, "HTML");
+        }
+        
+        nextState = 'AWAITING_SEARCH_TO';
+        response = MESSAGES.search_to;
+        
+    // Handle Destination selection (step 2)
+    } else if (state.state === 'AWAITING_SEARCH_TO') {
+        data.to = callbackData.replace('cb_search_to_', '');
+
+        keyboard = {
+            inline_keyboard: [
+                [{ text: "📅 Today", callback_data: `cb_search_date_today` }],
+                [{ text: "➡️ Tomorrow", callback_data: `cb_search_date_tomorrow` }],
+                [{ text: "🗓️ Pick Specific Date (WIP)", callback_data: `cb_search_date_specific` }],
+            ]
+        };
+        nextState = 'AWAITING_SEARCH_DATE';
+        response = MESSAGES.search_date;
+
+    // Handle Date selection (step 3)
+    } else if (state.state === 'AWAITING_SEARCH_DATE') {
+        data.dateType = callbackData.replace('cb_search_date_', '');
+        let targetDate;
+
+        if (data.dateType === 'today') {
+            targetDate = new Date().toISOString().split('T')[0];
+        } else if (data.dateType === 'tomorrow') {
+            const tomorrow = new Date();
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            targetDate = tomorrow.toISOString().split('T')[0];
+        } else {
+            await saveAppState(chatId, 'IDLE', {});
+            return await sendMessage(chatId, MESSAGES.feature_wip + " Please restart search and select Today or Tomorrow.");
+        }
+        
+        data.date = targetDate;
+        await saveAppState(chatId, 'IDLE', {}); 
+        
+        return await showSearchResults(chatId, data.from, data.to, data.date);
+    }
+
+    await saveAppState(chatId, nextState, data);
+    await sendMessage(chatId, response, "HTML", keyboard);
+}
+// --- END NEW FIX ---
 
 async function handleSeatMap(chatId, text) {
     try {
@@ -1551,6 +1622,7 @@ app.post('/api/webhook', async (req, res) => {
             if (callbackData.startsWith('cb_register_role_')) {
                 await handleRoleSelection(chatId, callback.from, callbackData);
             } else if (callbackData.startsWith('cb_search_from_') || callbackData.startsWith('cb_search_to_') || callbackData.startsWith('cb_search_date_')) {
+                 // FIX: Calls the newly defined function
                  await handleSearchInputCallback(chatId, callbackData, state);
             } else if (callbackData === 'cb_payment_confirm') { 
                 if (state.state === 'AWAITING_PAYMENT') {
