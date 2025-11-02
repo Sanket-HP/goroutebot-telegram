@@ -10,7 +10,8 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`; 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
-// --- Predefined City List (For Search Feature) ---
+// --- Predefined City List (Used for suggested buttons only) ---
+// This list remains for quick access buttons but is no longer used for input validation.
 const MAJOR_CITIES = [
     'Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur', // Maharashtra
     'Panaji', 'Margao', // Goa
@@ -91,6 +92,7 @@ Time: {dateTime}
     search_from: "🗺️ <b>Travel From:</b> Select a city below, or <b>type the full name of your city</b> to search:",
     search_to: "➡️ <b>Travel To:</b> Select a city below, or <b>type the full name of your city</b> to search:",
     search_city_invalid: "❌ City not found. Please ensure you type the full city name correctly (e.g., 'Pune'). Try again:",
+    search_route_not_found: "❌ No routes available from <b>{city}</b>. Please check your spelling or try another city.",
     search_date: "📅 <b>Travel Date:</b> When do you plan to travel?",
     search_results: "🚌 <b>Search Results ({from} to {to}, {date})</b> 🚌\n\n",
     
@@ -451,7 +453,8 @@ async function handleStartSearch(chatId) {
             inline_keyboard: suggestedCities.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
         };
 
-        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1, available_cities: MAJOR_CITIES });
+        // Removed 'available_cities' from state data, as validation is now done by route availability checks.
+        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 }); 
         await sendMessage(chatId, MESSAGES.search_from, "HTML", keyboard);
 
     } catch (e) {
@@ -471,6 +474,7 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
     if (state.state === 'AWAITING_SEARCH_FROM') {
         data.from = callbackData.replace('cb_search_from_', '');
         
+        // Dynamically suggest popular destinations from the selected city
         const snapshot = await db.collection('buses').where('from', '==', data.from).get();
         const availableDestinations = new Set();
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
@@ -484,10 +488,10 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
 
         if (dests.length === 0) {
              await saveAppState(chatId, 'IDLE', {});
-             return await sendMessage(chatId, `❌ No destinations available from <b>${data.from}</b>.`, "HTML");
+             return await sendMessage(chatId, `❌ No destinations currently scheduled from <b>${data.from}</b>.`, "HTML");
         }
         
-        data.available_cities = dests; // Update city list for the next step (text search)
+        // Removed data.available_cities = dests;
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
         
@@ -533,15 +537,10 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
 
 async function handleSearchTextInput(chatId, text, state) {
     const cityName = text.trim();
-    const cityList = state.data.available_cities || MAJOR_CITIES;
     
-    // Check if the input city is a valid major city
-    if (!cityList.includes(cityName)) {
-        return await sendMessage(chatId, MESSAGES.search_city_invalid, "HTML");
-    }
+    // --- CHANGE: Removed validation against MAJOR_CITIES. Any text input is accepted. ---
 
     if (state.state === 'AWAITING_SEARCH_FROM') {
-        // If valid city, jump to Destination selection
         state.data.from = cityName;
         
         const db = getFirebaseDb();
@@ -558,16 +557,29 @@ async function handleSearchTextInput(chatId, text, state) {
 
         if (dests.length === 0) {
              await saveAppState(chatId, 'IDLE', {});
-             return await sendMessage(chatId, `❌ No destinations available from <b>${cityName}</b>.`, "HTML");
+             // Check against DB routes instead of fixed city list
+             return await sendMessage(chatId, MESSAGES.search_route_not_found.replace('{city}', cityName), "HTML");
         }
         
-        state.data.available_cities = dests; 
         await saveAppState(chatId, 'AWAITING_SEARCH_TO', state.data);
         await sendMessage(chatId, MESSAGES.search_to, "HTML", keyboard);
 
     } else if (state.state === 'AWAITING_SEARCH_TO') {
-        // If valid city, jump to Date selection
         state.data.to = cityName;
+
+        // Final check to see if a route exists before showing dates
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('buses')
+            .where('from', '==', state.data.from)
+            .where('to', '==', cityName)
+            .limit(1)
+            .get();
+
+        if (snapshot.empty) {
+             await saveAppState(chatId, 'IDLE', {});
+             return await sendMessage(chatId, `❌ No bus routes found from <b>${state.data.from}</b> to <b>${cityName}</b>. Please start a new search.`, "HTML");
+        }
+
 
         const keyboard = {
             inline_keyboard: [
