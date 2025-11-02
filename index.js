@@ -514,7 +514,6 @@ async function sendHelpMessage(chatId) {
                 [{ text: "📍 Start Route Tracking", callback_data: "cb_start_route_tracking_prompt" }],
                 [{ text: "📋 Show Manifest", callback_data: "cb_show_manifest_prompt" }],
                 [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
-                // FIX: Corrected syntax error here: added quote and comma
                 [{ text: "Check-In/Release", callback_data: "cb_checkin_release_prompt"}] 
             );
         }
@@ -543,11 +542,31 @@ async function sendHelpMessage(chatId) {
 
 /* --------------------- General Handlers ---------------------- */
 
-// --- FIX: Re-added missing handleBusSearch definition ---
+// --- FIX: Definition for starting the guided search flow ---
+async function handleStartSearch(chatId) {
+    try {
+        // Use a subset of major cities for initial button suggestions
+        const suggestedCities = MAJOR_CITIES.slice(0, 6); 
+        
+        const keyboard = {
+            inline_keyboard: suggestedCities.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
+        };
+
+        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 }); 
+        await sendMessage(chatId, MESSAGES.search_from, "HTML", keyboard);
+
+    } catch (e) {
+        console.error('Error starting search:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// -----------------------------------------------------------
+
+// --- Booking Entry Point ---
 async function handleBusSearch(chatId) {
     await handleStartSearch(chatId);
 }
-// -----------------------------------------------------
+// -----------------------------
 
 // --- OWNER: REVENUE REPORT ---
 
