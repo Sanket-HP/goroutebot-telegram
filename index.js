@@ -1043,7 +1043,46 @@ async function handleSeatMap(chatId, text) {
 }
 
 
-// ... (Rest of the handlers remain the same)
+// --- FIX: Added Missing handleSeatSelection function ---
+async function handleSeatSelection(chatId, text) {
+    try {
+        const match = text.match(/book seat\s+(BUS\d+)\s+([A-Z0-9]+)/i);
+        if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID and Seat Number.\nExample: <pre>Book seat BUS101 3A</pre>", "HTML");
+
+        const busID = match[1].toUpperCase();
+        const seatNo = match[2].toUpperCase();
+
+        const db = getFirebaseDb();
+        
+        const seatRef = db.collection('seats').doc(`${busID}-${seatNo}`);
+        const seatDoc = await seatRef.get();
+
+        if (!seatDoc.exists || seatDoc.data().status !== 'available') {
+             return await sendMessage(chatId, MESSAGES.seat_not_available.replace('{seatNo}', seatNo).replace('{busID}', busID), "HTML");
+        }
+
+        const bookingData = {
+            busID,
+            seatNo,
+            passengers: [],
+        };
+        await saveAppState(chatId, 'AWAITING_GENDER_SELECTION', bookingData);
+        
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "🚹 Male", callback_data: `cb_select_gender_M` }],
+                [{ text: "🚺 Female", callback_data: `cb_select_gender_F` }],
+            ]
+        };
+        await sendMessage(chatId, MESSAGES.gender_prompt.replace('{seatNo}', seatNo), "HTML", keyboard);
+        
+    } catch (error) {
+        console.error('❌ handleSeatSelection error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END FIX ---
+
 
 async function handleShowLiveLocation(chatId, text) {
     const match = text.match(/show live location\s+(BUS\d+)/i);
