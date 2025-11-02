@@ -543,6 +543,12 @@ async function sendHelpMessage(chatId) {
 
 /* --------------------- General Handlers ---------------------- */
 
+// --- FIX: Re-added missing handleBusSearch definition ---
+async function handleBusSearch(chatId) {
+    await handleStartSearch(chatId);
+}
+// -----------------------------------------------------
+
 // --- OWNER: REVENUE REPORT ---
 
 async function handleShowRevenue(chatId, text) {
@@ -868,7 +874,7 @@ async function handleSeatMap(chatId, text) {
                 
                 const data = seatStatus[seatNo] || {};
                 const status = data.status || '⬜';
-                const typeIcon = seatType.includes('Sleeper') ? '🛏️' : '💺';
+                const typeIcon = seatType.includes('Sleeper') ? '🛏️' : '🪑';
                 let content = '';
                 
                 if (status === 'available') {
@@ -1172,9 +1178,34 @@ async function handleManagerInput(chatId, text, state) {
     }
 }
 
-// ... (Rest of the handlers remain the same)
+// --- FIX: Re-added missing startUserRegistration definition ---
+async function startUserRegistration(chatId, user) {
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('users').doc(String(chatId)).get();
 
-// --- Existing Logic (re-added for completeness) ---
+        if (doc.exists) {
+            const userName = user.first_name || 'User'; 
+            await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
+            await sendHelpMessage(chatId); 
+        } else {
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: "👤 User (Book Tickets)", callback_data: "cb_register_role_user" }],
+                    [{ text: "👨‍💼 Bus Manager (Manage Buses)", callback_data: "cb_register_role_manager" }],
+                    [{ text: "👑 Bus Owner (Manage Staff)", callback_data: "cb_register_role_owner" }],
+                ]
+            };
+            await sendMessage(chatId, MESSAGES.prompt_role, "HTML", keyboard);
+        }
+    } catch (error) {
+        console.error(`❌ CRITICAL /start error for ${chatId}:`, error.message);
+        await sendMessage(chatId, MESSAGES.db_error + " (Check FIREBASE_CREDS_BASE64/Permissions. Error: " + error.message + ")");
+    }
+}
+// -----------------------------------------------------
+
+// ... (Rest of the handlers remain the same)
 
 async function handleAddSeatsCommand(chatId, text) {
     const match = text.match(/add seats\s+(BUS\d+)\s+(\d+)/i);
@@ -1351,7 +1382,7 @@ async function handleUserMessage(chatId, text, user) {
         } else if (state.state.startsWith('MANAGER_TRACKING')) {
             await handleManagerInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_AADHAR_API_SETUP')) { 
-            await handleAadharApiSetupInput(chatId, text);
+            await handleManagerInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_AWAITING_LIVE_ACTION')) { 
             const busID = state.data.busID;
              const keyboard = {
