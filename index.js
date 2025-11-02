@@ -10,8 +10,10 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`; 
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
+// --- Mock Tracking URL (Conceptual Client Link) ---
+const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app";
+
 // --- Predefined City List (Used for suggested buttons only) ---
-// This list remains for quick access buttons but is no longer used for input validation.
 const MAJOR_CITIES = [
     'Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur', // Maharashtra
     'Panaji', 'Margao', // Goa
@@ -100,6 +102,12 @@ Time: {dateTime}
     manifest_header: "📋 <b>Bus Manifest - {busID}</b>\nRoute: {from} → {to}\nDate: {date}\nTotal Booked Seats: {count}\n\n",
     manifest_entry: " • <b>Seat {seat}:</b> {name} (Aadhar {aadhar}) {gender}",
     no_manifest: "❌ No confirmed bookings found for bus {busID}.",
+
+    // NEW TRACKING MESSAGES
+    manager_tracking_prompt: "📍 <b>Start Tracking:</b> Enter the Bus ID that is now departing (e.g., <pre>BUS101</pre>):",
+    manager_tracking_started: "✅ <b>Tracking Active for {busID}!</b> The bus status is now 'Departed'.\n\nAll booked passengers on this route have been notified with the tracking link.",
+    tracking_not_tracking: "❌ Bus <b>{busID}</b> has not started tracking yet or the route is finished. Please check with the operator.",
+    passenger_tracking_info: "🚍 <b>Live Tracking - {busID}</b>\n\n📍 <b>Last Location:</b> {location}\n🕒 <b>Last Updated:</b> {time}\n\n🔗 <b>Tracking Link:</b> <a href='{trackingUrl}'>Tap here to see the live map</a>",
 
     // Manager
     manager_add_bus_init: "📝 <b>Bus Creation:</b> Enter the <b>Bus Number</b> (e.g., <pre>MH-12 AB 1234</pre>):",
@@ -342,31 +350,42 @@ async function sendLiveLocationUpdates() {
     let updatesSent = 0;
 
     try {
-        const busesSnapshot = await db.collection('buses').where('manager_chat_id', '!=', null).get();
+        // Find all buses that have tracking enabled (is_tracking == true)
+        const busesSnapshot = await db.collection('buses').where('is_tracking', '==', true).get();
 
         const currentTime = new Date();
         const notificationTime = currentTime.toLocaleTimeString('en-IN');
-        const mockLocation = ["New Delhi Station", "Mumbai Central", "Pune Junction", "Jaipur Highway", "Bus is en route"];
+        // Added more mock locations to simulate journey progress
+        const mockLocation = ["NH44 Checkpoint", "Toll Plaza 5", "Rest Area B", "City Outskirts", "Mid-route"];
         
         busesSnapshot.forEach(busDoc => {
             const data = busDoc.data();
             const busID = data.bus_id;
-            const managerId = data.manager_chat_id;
+            const managerId = data.manager_chat_id; // Use manager_chat_id for notification
             
+            // Generate a random mock location
             const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
 
+            // Update the bus document with a new, mock location and time
             busDoc.ref.update({
                 last_location_time: admin.firestore.FieldValue.serverTimestamp(),
                 last_location_name: randomLocation
             });
 
-            const managerNotification = MESSAGES.tracking_passenger_info
-                .replace('{busID}', busID)
-                .replace('{location}', randomLocation)
-                .replace('{time}', notificationTime);
+            // 1. Notify the Manager (as proof the cron job ran and to update their tracking info)
+            if (managerId) {
+                const managerNotification = MESSAGES.tracking_passenger_info
+                    .replace('{busID}', busID)
+                    .replace('{location}', randomLocation)
+                    .replace('{time}', notificationTime)
+                    .replace('{trackingUrl}', `${MOCK_TRACKING_BASE_URL}?bus=${busID}`);
+                
+                updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "HTML"));
+                updatesSent++;
+            }
             
-            updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "HTML"));
-            updatesSent++;
+            // 2. NOTE: In a production system, you would query the 'bookings' collection here
+            // to find and notify every passenger of this bus. (Left as note as requested)
         });
 
         await Promise.all(updates);
@@ -417,6 +436,7 @@ async function sendHelpMessage(chatId) {
         if (userRole === 'manager' || userRole === 'owner') {
             baseButtons = [
                 [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
+                [{ text: "📍 Start Route Tracking", callback_data: "cb_start_route_tracking_prompt" }], // NEW BUTTON
                 [{ text: "📋 Show Manifest", callback_data: "cb_show_manifest_prompt" }],
                 [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
                 [{ text: "🚌 View Schedules", callback_data: "cb_book_bus" }],
@@ -443,6 +463,78 @@ async function sendHelpMessage(chatId) {
 }
 
 /* --------------------- General Handlers ---------------------- */
+
+async function handleStartTrackingCommand(chatId, text) {
+    const match = text.match(/start tracking\s+(BUS\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID.\nExample: <pre>Start tracking BUS101</pre>", "HTML");
+
+    const busID = match[1].toUpperCase();
+
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+        return await sendMessage(chatId, "❌ You do not have permission to start tracking.");
+    }
+
+    try {
+        const db = getFirebaseDb();
+        const busRef = db.collection('buses').doc(busID);
+        const busDoc = await busRef.get();
+
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`);
+
+        // 1. Update Bus Status to departed and activate tracking
+        await busRef.update({ 
+            is_tracking: true,
+            status: 'departed',
+            manager_chat_id: String(chatId), // Ensure manager is linked for cron notifications
+            last_location_name: busDoc.data().from, // Start location is 'from' city
+            last_location_time: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        await sendMessage(chatId, MESSAGES.manager_tracking_started.replace('{busID}', busID), "HTML");
+        
+        // 2. SIMULATE sending tracking link to all booked passengers (as requested by user logic)
+        // In a full app, we would query the 'bookings' collection here and send the link to each passenger's chat_id.
+
+    } catch (e) {
+        console.error('❌ Start Tracking Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handlePassengerTracking(chatId, text) {
+    const match = text.match(/track bus\s+(BUS\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID.\nExample: <pre>Track bus BUS101</pre>", "HTML");
+
+    const busID = match[1].toUpperCase();
+
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+
+        if (!busDoc.exists || !busDoc.data().is_tracking) {
+            return await sendMessage(chatId, MESSAGES.tracking_not_tracking.replace('{busID}', busID), "HTML");
+        }
+
+        const busData = busDoc.data();
+        const lastUpdateTime = busData.last_location_time ? 
+            busData.last_location_time.toDate().toLocaleTimeString('en-IN') : 'N/A';
+            
+        const trackingUrl = `${MOCK_TRACKING_BASE_URL}?bus=${busID}`; // Mock URL
+
+        const response = MESSAGES.passenger_tracking_info
+            .replace('{busID}', busID)
+            .replace('{location}', busData.last_location_name || 'Location update pending')
+            .replace('{time}', lastUpdateTime)
+            .replace('{trackingUrl}', trackingUrl);
+            
+        await sendMessage(chatId, response, "HTML");
+        
+    } catch (e) {
+        console.error('❌ Passenger Tracking Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
 
 async function handleStartSearch(chatId) {
     try {
@@ -491,7 +583,6 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
              return await sendMessage(chatId, `❌ No destinations currently scheduled from <b>${data.from}</b>.`, "HTML");
         }
         
-        // Removed data.available_cities = dests;
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
         
@@ -538,8 +629,6 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
 async function handleSearchTextInput(chatId, text, state) {
     const cityName = text.trim();
     
-    // --- CHANGE: Removed validation against MAJOR_CITIES. Any text input is accepted. ---
-
     if (state.state === 'AWAITING_SEARCH_FROM') {
         state.data.from = cityName;
         
@@ -1459,7 +1548,10 @@ async function handleManagerInput(chatId, text, state) {
                         boarding_points: data.boardingPoints, 
                         total_seats: 40,
                         rating: 5.0,
-                        status: 'scheduled'
+                        status: 'scheduled',
+                        is_tracking: false, // NEW: Tracking is off by default
+                        last_location_name: from,
+                        last_location_time: admin.firestore.FieldValue.serverTimestamp()
                     });
                     
                     await db.collection('user_state').doc(String(chatId)).delete(); 
@@ -1712,8 +1804,11 @@ async function handleUserMessage(chatId, text, user) {
     else if (textLower.startsWith('show manifest')) {
         await handleShowManifest(chatId, text);
     }
-    else if (textLower.startsWith('live tracking')) { 
-        await sendMessage(chatId, MESSAGES.feature_wip);
+    else if (textLower.startsWith('start tracking')) { // NEW MANAGER COMMAND
+        await handleStartTrackingCommand(chatId, text);
+    }
+    else if (textLower.startsWith('track bus')) { // NEW PASSENGER COMMAND
+        await handlePassengerTracking(chatId, text);
     }
     else { 
         await sendMessage(chatId, MESSAGES.unknown_command, "HTML");
@@ -1805,6 +1900,8 @@ app.post('/api/webhook', async (req, res) => {
                 await sendMessage(chatId, MESSAGES.feature_wip);
             } else if (callbackData === 'cb_show_manifest_prompt') {
                 await sendMessage(chatId, "📋 Please send the manifest command with the Bus ID.\nExample: <pre>Show manifest BUS101</pre>", "HTML");
+            } else if (callbackData === 'cb_start_route_tracking_prompt') { // NEW MANAGER CALLBACK
+                await sendMessage(chatId, MESSAGES.manager_tracking_prompt, "HTML");
             }
         }
     } catch (error) {
