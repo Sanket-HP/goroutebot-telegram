@@ -2748,3 +2748,5 @@ app.get('/', (req, res) => {
 module.exports = app;
 // Export cron function so Vercel can run it
 module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
+// Export Razorpay webhook handler
+module.exports.razorpayWebhookHandler = app;
