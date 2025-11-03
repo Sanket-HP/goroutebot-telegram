@@ -611,9 +611,9 @@ async function handleShowRevenue(chatId, text) {
             .replace('{totalRevenue}', (totalRevenue / 100).toFixed(2));
             
         await sendMessage(chatId, response, "HTML");
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Show Revenue Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -647,9 +647,9 @@ async function handleSetBusStatus(chatId, text) {
 
         await busRef.update(updateData);
         await sendMessage(chatId, MESSAGES.bus_status_updated.replace('{busID}', busID).replace('{status}', newStatus.toUpperCase()), "HTML");
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Set Bus Status Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -680,9 +680,9 @@ async function handleCheckIn(chatId, text) {
         });
 
         await sendMessage(chatId, MESSAGES.checkin_success.replace('{bookingId}', bookingId), "HTML");
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Check-in Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -716,9 +716,9 @@ async function handleSeatRelease(chatId, text) {
         });
 
         await sendMessage(chatId, MESSAGES.seat_release_success.replace('{seatNo}', seatNo).replace('{busID}', busID), "HTML");
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Seat Release Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -741,9 +741,9 @@ async function handleShowAadharApiConfig(chatId) {
             .replace('{status}', status);
         
         await sendMessage(chatId, response, "HTML");
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Show Aadhar API Config Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -770,9 +770,9 @@ async function handleFareAlertSetup(chatId, text) {
 
         const response = MESSAGES.fare_alert_set.replace('{from}', from).replace('{to}', to).replace('{time}', time);
         await sendMessage(chatId, response, "HTML");
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Fare Alert Setup Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -797,12 +797,13 @@ async function handleUserProfile(chatId) {
                                  `<b>Member since:</b> ${joinDate}`;
             
             await sendMessage(chatId, profileText, "HTML");
+            return; // Explicit return
         } else {
             await sendMessage(chatId, MESSAGES.user_not_found);
+            return; // Explicit return
         }
 
     } catch (error) {
-        console.error('❌ Error in handleUserProfile:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -818,6 +819,7 @@ async function handleUpdatePhoneNumberCallback(chatId) {
     try {
         await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
         await sendMessage(chatId, MESSAGES.update_phone_prompt, "HTML");
+        return; // Explicit return
     } catch (e) {
         await sendMessage(chatId, MESSAGES.db_error + " Could not initiate phone update.");
     }
@@ -854,9 +856,9 @@ async function handleShowMyTrips(chatId) {
 
         const response = MESSAGES.manager_list_trips.replace('{tripList}', tripList);
         await sendMessage(chatId, response, "HTML");
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Show My Trips Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -900,9 +902,9 @@ async function showSearchResults(chatId, from, to, date) {
             response += `📋 "Show seats ${bus.busID}" to view seats\n\n`;
         }
         await sendMessage(chatId, response, "HTML");
+        return; // Explicit return
         
     } catch (error) {
-        console.error('❌ Bus search results error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1091,9 +1093,9 @@ async function handleSeatMap(chatId, text) {
         seatMap += `💡 <b>Book a seat:</b> "Book seat ${busID} 1A"`;
 
         await sendMessage(chatId, seatMap, "HTML");
+        return;
         
     } catch (error) {
-        console.error('❌ Seat map error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1131,9 +1133,9 @@ async function handleSeatSelection(chatId, text) {
             ]
         };
         await sendMessage(chatId, MESSAGES.gender_prompt.replace('{seatNo}', seatNo), "HTML", keyboard);
+        return;
         
     } catch (error) {
-        console.error('❌ handleSeatSelection error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1167,9 +1169,9 @@ async function handleShowLiveLocation(chatId, text) {
             .replace('{trackingUrl}', trackingUrl);
             
         await sendMessage(chatId, response, "HTML");
+        return;
         
     } catch (e) {
-        console.error('❌ Passenger Tracking Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1200,9 +1202,9 @@ async function handleBookingInput(chatId, text, state) {
                 ]
             };
             await sendMessage(chatId, MESSAGES.booking_passenger_prompt.replace('{count}', booking.passengers.length).replace('{seatNo}', booking.seatNo), "HTML", keyboard);
+            return;
         }
     } catch (error) {
-        console.error('❌ handleBookingInput error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1246,9 +1248,9 @@ async function handleStaffDelegation(chatId, text) {
         } else {
             await sendMessage(chatId, MESSAGES.owner_staff_revoked.replace('{chatId}', targetChatId), "HTML");
         }
+        return; // Explicit return
 
     } catch (e) {
-        console.error('❌ Staff Delegation Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1257,6 +1259,7 @@ async function handleStaffDelegation(chatId, text) {
 // --- NEW DEFINITION: handleUserShareLocation (WIP) ---
 async function handleUserShareLocation(chatId) {
     await sendMessage(chatId, MESSAGES.user_share_location_wip, "HTML");
+    return; // Explicit return
 }
 // --- END NEW DEFINITION ---
 
@@ -1277,8 +1280,8 @@ async function handleAadharApiSetupInput(chatId, text) {
 
         await saveAppState(chatId, 'IDLE', {});
         await sendMessage(chatId, MESSAGES.aadhar_api_success.replace('{url}', text.trim()), "HTML");
+        return; // Explicit return
     } catch (e) {
-        console.error('❌ Aadhar API Setup Error:', e.message);
         await sendMessage(chatId, MESSAGES.db_error + " Failed to save Aadhar API URL.");
     }
 }
@@ -1293,6 +1296,7 @@ async function handleStartTrackingFlow(chatId) {
     
     await saveAppState(chatId, 'MANAGER_TRACKING_BUS_ID', {});
     await sendMessage(chatId, MESSAGES.manager_tracking_prompt, "HTML");
+    return; // Explicit return
 }
 // --- END NEW DEFINITION ---
 
@@ -1328,6 +1332,7 @@ async function handleTrackingAction(chatId, action, busID) {
         // ... (Notification logic is conceptual and simplified here)
 
         await sendMessage(chatId, MESSAGES.manager_tracking_started.replace('{busID}', busID).replace('{stopTime}', stopTimeStr), "HTML");
+        return; // Explicit return
 
 
     } else if (action === 'stop') {
@@ -1339,6 +1344,7 @@ async function handleTrackingAction(chatId, action, busID) {
         });
         await saveAppState(chatId, 'IDLE', {});
         await sendMessage(chatId, MESSAGES.manager_tracking_stopped.replace('{busID}', busID), "HTML");
+        return; // Explicit return
     }
 }
 // --- END NEW DEFINITION ---
@@ -1353,9 +1359,9 @@ async function handleManagerAddBus(chatId) {
         
         await saveAppState(chatId, 'MANAGER_ADD_BUS_NUMBER', {});
         await sendMessage(chatId, MESSAGES.manager_add_bus_init, "HTML");
+        return; // Explicit return
 
     } catch (error) {
-        console.error('❌ Manager Add Bus error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1405,10 +1411,6 @@ async function handleManagerInput(chatId, text, state) {
                 }
                 
                 data.trackingDuration = text.trim(); // Save string for confirmation
-                
-                // Final confirmation and start
-                const stopTime = new Date(Date.now() + durationMs);
-                const stopTimeStr = stopTime.toLocaleTimeString('en-IN');
                 
                 // Call the start function to save data and notify passengers
                 await handleTrackingAction(chatId, 'start_live', data.busID);
@@ -1598,7 +1600,6 @@ async function handleManagerInput(chatId, text, state) {
         await sendMessage(chatId, response, "HTML");
 
     } catch (error) {
-        console.error('❌ Manager Input Flow Error:', error.message);
         await db.collection('user_state').doc(String(chatId)).delete();
         await sendMessage(chatId, MESSAGES.db_error + " Bus creation failed. Please try again.");
     }
@@ -1625,7 +1626,6 @@ async function startUserRegistration(chatId, user) {
             await sendMessage(chatId, MESSAGES.prompt_role, "HTML", keyboard);
         }
     } catch (error) {
-        console.error(`❌ CRITICAL /start error for ${chatId}:`, error.message);
         await sendMessage(chatId, MESSAGES.db_error + " (Check FIREBASE_CREDS_BASE64/Permissions. Error: " + error.message + ")");
     }
 }
@@ -1647,8 +1647,8 @@ async function handleRoleSelection(chatId, user, callbackData) {
         };
         await db.collection('users').doc(String(chatId)).set(newUser);
         await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "HTML");
+        return;
     } catch (error) {
-        console.error('❌ handleRoleSelection error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -1713,9 +1713,9 @@ async function handleAddSeatsCommand(chatId, text) {
         
         await batch.commit();
         await sendMessage(chatId, MESSAGES.manager_seats_saved.replace('{busID}', busID), "HTML");
+        return;
 
     } catch (error) {
-        console.error('❌ Add Seats Command Error:', error.message);
         await sendMessage(chatId, MESSAGES.db_error + " Seat creation failed.");
     }
 }
@@ -1728,6 +1728,7 @@ async function handleInventorySyncSetup(chatId) {
     
     await saveAppState(chatId, 'MANAGER_SYNC_SETUP_BUSID', {});
     await sendMessage(chatId, MESSAGES.sync_setup_init, "HTML");
+    return;
 }
 
 async function handleInventorySyncInput(chatId, text, state) {
@@ -1769,8 +1770,6 @@ async function handleInventorySyncInput(chatId, text, state) {
         await sendMessage(chatId, response, "HTML");
 
     } catch (error) {
-        console.error('❌ Inventory Sync Flow Error:', error.message);
-        await db.collection('user_state').doc(String(chatId)).delete(); 
         await sendMessage(chatId, MESSAGES.db_error + " Inventory sync setup failed. Please try again.");
     }
 }
