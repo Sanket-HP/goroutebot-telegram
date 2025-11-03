@@ -22,9 +22,11 @@ const MAJOR_CITIES = [
 ].sort();
 
 // --- Razorpay Initialization ---
+// NOTE: Hardcoded keys below for immediate testing/debugging as requested.
+// REVERT THIS for production and use environment variables (`process.env.RAZORPAY_KEY_ID`, etc.)
 const razorpay = new Razorpay({
-    key_id: process.env.RAZORPAY_KEY_ID,
-    key_secret: process.env.RAZORPAY_KEY_SECRET,
+    key_id: 'rzp_test_Rb8uedVgshWFou', // User-provided Test Key ID
+    key_secret: 'lgil1rvoEMzuGEeUX26vn5PE', // User-provided Test Key Secret
 });
 
 // --- MESSAGES (Updated to use HTML tags for robustness) ---
