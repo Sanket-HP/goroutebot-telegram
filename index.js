@@ -2213,7 +2213,15 @@ async function createPaymentOrder(chatId, bookingData) {
             .replace('{orderId}', order.id)
             .replace('{paymentUrl}', paymentUrl);
 
-        await sendMessage(chatId, response, "HTML");
+        // --- ADDED KEYBOARD HERE ---
+        const keyboard = {
+            inline_keyboard: [
+                [{ text: "✅ I have Paid (Confirm)", callback_data: "cb_payment_confirm" }],
+                [{ text: "❌ Cancel Booking", callback_data: "cb_payment_cancel" }]
+            ]
+        };
+
+        await sendMessage(chatId, response, "HTML", keyboard);
 
     } catch (e) {
         // IMPROVED LOGGING: This is the key change to help diagnose the invalid key issue.
@@ -2230,11 +2238,15 @@ async function handlePaymentVerification(chatId, stateData) {
     const db = getFirebaseDb();
 
     try {
+        // Fetch the order from Razorpay to verify payment status
         const order = await razorpay.orders.fetch(orderId);
         
         if (order.status === 'paid') {
             const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
-            if (!sessionDoc.exists) return await sendMessage(chatId, "❌ Critical: Payment session expired or missing.");
+            if (!sessionDoc.exists) {
+                // If payment session is already processed (e.g. by webhook), just confirm status
+                return await sendMessage(chatId, `✅ Payment for Order ID ${orderId} verified. Your ticket should arrive shortly.`);
+            }
 
             const bookingData = sessionDoc.data().booking;
             await commitFinalBookingBatch(chatId, bookingData);
@@ -2719,5 +2731,3 @@ app.get('/', (req, res) => {
 module.exports = app;
 // Export cron function so Vercel can run it
 module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
-// Exported for manual payment verification testing
-module.exports.commitFinalBookingBatch = commitFinalBookingBatch;
