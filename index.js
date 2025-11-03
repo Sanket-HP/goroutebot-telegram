@@ -946,7 +946,6 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
     if (state.state === 'AWAITING_SEARCH_FROM') {
         data.from = callbackData.replace('cb_search_from_', '');
         
-        // Dynamically suggest popular destinations from the selected city
         const snapshot = await db.collection('buses').where('from', '==', data.from).get();
         const availableDestinations = new Set();
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
@@ -1404,11 +1403,19 @@ async function handleManagerInput(chatId, text, state) {
     const validSeatTypes = ['sleeper upper', 'sleeper lower', 'seater'];
 
     try {
+        // FIX: Ensure text is a non-empty string before proceeding. This prevents the 'Cannot read properties of undefined' error.
+        if (!text || typeof text !== 'string' || text.trim() === '') {
+            await saveAppState(chatId, state.state, data); // Keep state
+            return await sendMessage(chatId, "❌ Please provide the required text input for this step.", "HTML");
+        }
+        
+        const textLower = text.toLowerCase().trim(); // Define a safe variable for lowercased checks
+
         switch (state.state) {
             
             // --- NEW TRACKING FLOW ---
             case 'MANAGER_TRACKING_BUS_ID':
-                const busMatch = text.match(/(BUS\d+)/i);
+                const busMatch = text.match(/(BUS\d+)/i); // Use raw text for matching
                 const busID = busMatch ? busMatch[1].toUpperCase() : null;
 
                 if (!busID) return await sendMessage(chatId, "❌ Invalid Bus ID format. Try again:", "HTML");
@@ -1472,7 +1479,8 @@ async function handleManagerInput(chatId, text, state) {
                 break;
                 
             case 'MANAGER_ADD_BUS_TYPE':
-                data.busLayout = text.toLowerCase().trim();
+                // Use textLower for comparison
+                data.busLayout = textLower;
                 if (!validLayouts.includes(data.busLayout)) return await sendMessage(chatId, MESSAGES.manager_invalid_layout, "HTML");
 
                 data.seatsToConfigure = [];
@@ -1488,7 +1496,8 @@ async function handleManagerInput(chatId, text, state) {
                 break;
                 
             case 'MANAGER_ADD_SEAT_TYPE':
-                const seatTypeInput = text.toLowerCase().trim();
+                // Use textLower for comparison
+                const seatTypeInput = textLower;
                 const isValidSeatType = validSeatTypes.includes(seatTypeInput);
 
                 if (!isValidSeatType) return await sendMessage(chatId, MESSAGES.manager_invalid_seat_type, "HTML");
@@ -2406,6 +2415,7 @@ async function handleBookingInfo(chatId) {
         await sendMessage(chatId, bookingList + '💡 Use "Get ticket BOOKID" or "Check status BOOKID".', "HTML");
 
     } catch (e) {
+        console.error("handleBookingInfo Error:", e.message); // Added console logging for this specific function.
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -2413,7 +2423,7 @@ async function handleBookingInfo(chatId) {
 /* --------------------- Message Router ---------------------- */
 
 async function handleUserMessage(chatId, text, user) {
-    const textLower = text.toLowerCase().trim();
+    const textLower = text ? text.toLowerCase().trim() : ''; // Defensive check for null/undefined text input
     let state;
     
     // --- GLOBAL COMMANDS (Check first to allow flow breaking/reset) ---
@@ -2473,12 +2483,9 @@ async function handleUserMessage(chatId, text, user) {
              await handleSearchTextInput(chatId, text, state);
         } else if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
             await handleBookingInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_ADD_BUS') || state.state.startsWith('MANAGER_ADD_SEAT')) {
+        } else if (state.state.startsWith('MANAGER_ADD_BUS') || state.state.startsWith('MANAGER_ADD_SEAT') || state.state.startsWith('MANAGER_TRACKING') || state.state.startsWith('MANAGER_AADHAR_API_SETUP') || state.state.startsWith('MANAGER_SYNC_SETUP')) {
+            // Note: handleManagerInput now handles non-string input defensively.
             await handleManagerInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_TRACKING')) {
-            await handleManagerInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_AADHAR_API_SETUP')) { 
-             await handleManagerInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_AWAITING_LIVE_ACTION')) { 
             const busID = state.data.busID;
              const keyboard = {
@@ -2490,8 +2497,6 @@ async function handleUserMessage(chatId, text, user) {
             await sendMessage(chatId, MESSAGES.manager_tracking_session_active.replace('{busID}', busID) + "\n\nPlease use the buttons below to control the session.", "HTML", keyboard);
         } else if (state.state === 'AWAITING_NEW_PHONE') { 
              await handlePhoneUpdateInput(chatId, text);
-        } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
-            await handleInventorySyncInput(chatId, text, state);
         } else if (state.state === 'AWAITING_PAYMENT') {
             const keyboard = {
                 inline_keyboard: [
