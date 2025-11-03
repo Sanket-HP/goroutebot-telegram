@@ -188,12 +188,25 @@ function getFirebaseDb() {
     try {
         const rawCredsBase64 = process.env.FIREBASE_CREDS_BASE64;
         if (!rawCredsBase64) {
+            // CRITICAL: Fail fast if the variable is missing
             throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
         }
         
-        // FIX: Corrected 'base66' to 'base64'
-        const jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
-        const serviceAccount = JSON.parse(jsonString);
+        let jsonString;
+        try {
+            // FIX: Added logging and explicit check for Buffer conversion failure
+            jsonString = Buffer.from(rawCredsBase64, 'base64').toString('utf8');
+        } catch (bufferError) {
+            throw new Error(`CRITICAL: Buffer conversion failed. Check FIREBASE_CREDS_BASE64 integrity (Base64 format error). Error: ${bufferError.message}`);
+        }
+
+        let serviceAccount;
+        try {
+            serviceAccount = JSON.parse(jsonString);
+        } catch (jsonError) {
+            throw new Error(`CRITICAL: JSON parsing failed. The credential string is corrupt. Error: ${jsonError.message}`);
+        }
+
 
         try {
             admin.initializeApp({
