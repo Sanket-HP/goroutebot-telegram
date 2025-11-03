@@ -1287,6 +1287,24 @@ async function handleTrackingAction(chatId, action, busID) {
 }
 // --- END NEW DEFINITION ---
 
+// --- FIX: ADDED Missing handleManagerAddBus definition ---
+async function handleManagerAddBus(chatId) {
+    try {
+        const userRole = await getUserRole(chatId);
+        if (userRole !== 'manager' && userRole !== 'owner') {
+             return await sendMessage(chatId, "❌ You do not have permission to add buses.");
+        }
+        
+        await saveAppState(chatId, 'MANAGER_ADD_BUS_NUMBER', {});
+        await sendMessage(chatId, MESSAGES.manager_add_bus_init, "HTML");
+
+    } catch (error) {
+        console.error('❌ Manager Add Bus error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END FIX ---
+
 
 async function handleManagerInput(chatId, text, state) {
     const db = getFirebaseDb();
