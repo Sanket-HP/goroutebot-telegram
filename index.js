@@ -14,12 +14,11 @@ const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app/"; 
 
 // --- Predefined City List (Used for suggested buttons only) ---
+// Updated to include explicit major cities and prioritize them for buttons.
 const MAJOR_CITIES = [
-    'Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur', // Maharashtra
-    'Panaji', 'Margao', // Goa
-    'Bengaluru', 'Hubballi', // Karnataka
-    'Hyderabad' // Telangana
-].sort();
+    'Mumbai', 'Kolhapur', 'Goa (Panaji)', 'Bengaluru', 'Hyderabad', 'Nagpur', 'Nashik', 
+    'Pune', 'Aurangabad', 'Margao', 'Hubballi'
+];
 
 // --- Seat Icons Mapping ---
 const SEAT_ICONS = {
@@ -63,7 +62,8 @@ Select an option from the menu below to get started. You can also type commands 
     phone_updated_success: "✅ Phone number updated successfully!",
     phone_invalid: "❌ Invalid phone number. Please enter a 10-digit number only.",
 
-    // Booking (UPDATED FOR DESTINATION)
+    // Booking (UPDATED FOR BOARDING & DESTINATION)
+    prompt_boarding: "🚌 <b>Boarding Point:</b> Please enter your preferred *boarding point* for this journey (e.g., <pre>Mumbai Central</pre> or <pre>Pune Bypass</pre>):",
     prompt_destination: "📍 <b>Drop-off Point:</b> Please enter the passenger's *final destination city* on this route (e.g., <pre>{to}</pre>):",
     booking_type_prompt: "👤 <b>Booking Seats:</b> Please select your booking type:",
     gender_prompt: "🚻 <b>Seat Safety:</b> Is the passenger booking seat {seatNo} a Male or Female?",
@@ -77,7 +77,7 @@ Select an option from the menu below to get started. You can also type commands 
     payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
     session_cleared: "🧹 <b>Previous booking session cleared.</b> Your locked seats have been released.",
 
-    // Detailed Ticket Confirmation (Used for Payment Success & Get Ticket)
+    // Detailed Ticket Confirmation (UPDATED FOR BOARDING POINT)
     payment_confirmed_ticket: `✅ <b>Payment Confirmed & E-Ticket Issued!</b>
     
 🎫 <b>E-Ticket Details</b>
@@ -86,6 +86,7 @@ Route: {from} → {to}
 Date: {journeyDate}
 Departure: {departTime}
 Seats: {seatList}
+Boarding Point: <b>{boardingPoint}</b>
 Passenger Drop-off: <b>{destination}</b>
 
 👤 <b>Passenger Info (Primary)</b>
@@ -1319,15 +1320,36 @@ async function handleBookSeatCallback(chatId, callbackData) {
         seatNo,
         busTo: busInfo.to,
         destination: null,
+        boardingPoint: null, // NEW FIELD INITIALIZED
         passengers: [],
     };
     
-    await saveAppState(chatId, 'AWAITING_DESTINATION', bookingData);
+    await saveAppState(chatId, 'AWAITING_BOARDING_POINT', bookingData); // NEW STATE
     
-    // Prompt for destination
-    await sendMessage(chatId, MESSAGES.prompt_destination.replace('{to}', busInfo.to), "HTML");
+    // Prompt for BOARDING point
+    await sendMessage(chatId, MESSAGES.prompt_boarding, "HTML"); // NEW MESSAGE
 }
 // --- END handleBookSeatCallback ---
+
+// --- NEW DEFINITION: handleBoardingPointInput ---
+async function handleBoardingPointInput(chatId, text, state) {
+    const boardingPoint = text.trim();
+
+    if (boardingPoint.length < 3) {
+        return await sendMessage(chatId, "❌ Please enter a valid boarding point (at least 3 characters). Try again:", "HTML");
+    }
+
+    const booking = state.data;
+    booking.boardingPoint = boardingPoint;
+
+    // Proceed to Destination Selection step
+    await saveAppState(chatId, 'AWAITING_DESTINATION', booking);
+
+    // Now prompt for destination (passing the bus's final destination for context)
+    await sendMessage(chatId, MESSAGES.prompt_destination.replace('{to}', booking.busTo), "HTML");
+}
+// --- END handleBoardingPointInput ---
+
 
 // --- NEW DEFINITION: handleDestinationSelectionInput ---
 async function handleDestinationSelectionInput(chatId, text, state) {
@@ -1393,11 +1415,16 @@ async function handleShowLiveLocation(chatId, text) {
     }
 }
 
-// --- handleBookingInput function ---
+// --- handleBookingInput function (UPDATED to route AWAITING_BOARDING_POINT) ---
 async function handleBookingInput(chatId, text, state) {
     try {
         const booking = state.data;
         
+        if (state.state === 'AWAITING_BOARDING_POINT') {
+            await handleBoardingPointInput(chatId, text, state);
+            return;
+        }
+
         if (state.state === 'AWAITING_DESTINATION') {
             await handleDestinationSelectionInput(chatId, text, state);
             return;
@@ -2157,7 +2184,7 @@ async function handlePhoneUpdateInput(chatId, text) {
     }
 }
 
-// 4. handleGetTicket
+// 4. handleGetTicket (UPDATED to display boarding point)
 async function handleGetTicket(chatId, text) {
     const match = text.match(/get ticket\s+(BOOK\d+)/i);
     if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Get ticket BOOK123456</pre>", "HTML");
@@ -2176,8 +2203,9 @@ async function handleGetTicket(chatId, text) {
         const busInfo = await getBusInfo(booking.busID);
         if (!busInfo) return await sendMessage(chatId, "❌ Bus information is unavailable.");
 
-        // Assuming a single seat booking, the destination is on the passenger's seat object
+        // Retrieve new fields
         const passengerDestination = booking.seats[0].booked_to_destination || busInfo.to;
+        const boardingPoint = booking.boarding_point || 'N/A'; 
 
         const response = MESSAGES.payment_confirmed_ticket
             .replace('{busName}', busInfo.busName || 'N/A')
@@ -2187,7 +2215,8 @@ async function handleGetTicket(chatId, text) {
             .replace('{journeyDate}', busInfo.date)
             .replace('{departTime}', busInfo.time)
             .replace('{seatList}', booking.seats.map(s => s.seatNo).join(', '))
-            .replace('{destination}', passengerDestination) // ADDED DESTINATION
+            .replace('{boardingPoint}', boardingPoint) // NEW POPULATION
+            .replace('{destination}', passengerDestination)
             .replace('{name}', booking.passengers[0].name)
             .replace('{phone}', booking.phone)
             .replace('{orderId}', booking.razorpay_order_id)
@@ -2470,6 +2499,7 @@ async function createPaymentOrder(chatId, bookingData) {
         const finalBookingData = {
             chat_id: String(chatId),
             busID: bookingData.busID,
+            boarding_point: bookingData.boardingPoint, // NEW FIELD ADDED
             // Seat object now includes the passenger's drop-off destination
             seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender, booked_to_destination: bookingData.destination })), 
             passengers: bookingData.passengers,
@@ -2605,6 +2635,7 @@ async function commitFinalBookingBatch(chatId, bookingData) {
         const busInfo = await getBusInfo(bookingData.busID);
         const seatsList = bookingData.seats.map(s => s.seatNo).join(', ');
         const passengerDestination = bookingData.seats[0].booked_to_destination || busInfo.to;
+        const boardingPoint = bookingData.boarding_point || 'N/A'; // Retrieve new field
 
 
         const response = MESSAGES.payment_confirmed_ticket
@@ -2615,7 +2646,8 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             .replace('{journeyDate}', busInfo.date)
             .replace('{departTime}', busInfo.time)
             .replace('{seatList}', seatsList)
-            .replace('{destination}', passengerDestination) // ADDED DESTINATION
+            .replace('{boardingPoint}', boardingPoint) // NEW POPULATION
+            .replace('{destination}', passengerDestination) 
             .replace('{name}', bookingData.passengers[0].name)
             .replace('{phone}', bookingData.phone)
             .replace('{orderId}', orderId)
@@ -2726,7 +2758,7 @@ async function handleUserMessage(chatId, text, user) {
         }
         
         // Handle in-flow commands
-        if (state.state === 'AWAITING_DESTINATION') {
+        if (state.state === 'AWAITING_BOARDING_POINT' || state.state === 'AWAITING_DESTINATION') { // NEW STATE ROUTING
             await handleBookingInput(chatId, text, state);
         } else if (state.state === 'AWAITING_SEARCH_FROM' || state.state === 'AWAITING_SEARCH_TO' || state.state === 'AWAITING_SEARCH_DATE') {
              await handleSearchTextInput(chatId, text, state);
