@@ -1671,6 +1671,11 @@ async function handleRoleSelection(chatId, user, callbackData) {
             join_date: admin.firestore.FieldValue.serverTimestamp()
         };
         await db.collection('users').doc(String(chatId)).set(newUser);
+        
+        // --- FIX: Set state to AWAITING_PROFILE_DETAILS after role selection ---
+        await saveAppState(chatId, 'AWAITING_PROFILE_DETAILS', { role: role });
+        // ------------------------------------------------------------------------
+        
         await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "HTML");
         return;
     } catch (error) {
@@ -1824,6 +1829,10 @@ async function handleProfileUpdate(chatId, text) {
             status: 'active'
         });
 
+        // --- FIX: Clear state after successful profile update ---
+        await saveAppState(chatId, 'IDLE', {});
+        // ---------------------------------------------------------
+        
         await sendMessage(chatId, MESSAGES.profile_updated, "HTML");
         await sendHelpMessage(chatId);
 
@@ -2447,6 +2456,13 @@ async function handleUserMessage(chatId, text, user) {
     }
 
     if (state.state !== 'IDLE') {
+        // --- FIX: Handle profile details input when user is in the AWAITING_PROFILE_DETAILS state ---
+        if (state.state === 'AWAITING_PROFILE_DETAILS' && textLower.startsWith('my profile details')) {
+            await handleProfileUpdate(chatId, text);
+            return;
+        }
+        // ---------------------------------------------------------------------------------------------
+
         // FIX: Handle the profile details command directly in the state block since new users start in 'unregistered' but need to input this while in the flow.
         if (textLower.startsWith('my profile details')) {
             await handleProfileUpdate(chatId, text);
@@ -2748,5 +2764,3 @@ app.get('/', (req, res) => {
 module.exports = app;
 // Export cron function so Vercel can run it
 module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
-// Export Razorpay webhook handler
-module.exports.razorpayWebhookHandler = app;
