@@ -410,6 +410,11 @@ async function sendManagerNotification(busID, type, details) {
  * @returns {number} Milliseconds
  */
 function parseDurationToMs(durationString) {
+    // FIX: Add defensive check for non-string input immediately
+    if (typeof durationString !== 'string' || durationString.trim() === '') {
+        return 0;
+    }
+    
     const parts = durationString.toLowerCase().trim().split(' ');
     if (parts.length !== 2) return 0;
 
@@ -1437,6 +1442,7 @@ async function handleManagerInput(chatId, text, state) {
             case 'MANAGER_TRACKING_DURATION':
                 const durationMs = parseDurationToMs(text);
                 if (durationMs === 0 || durationMs < (15 * 60 * 1000)) { // Must be at least 15 mins for cron job visibility
+                    // FIX: This error message is now correctly returned to the user
                     return await sendMessage(chatId, "❌ Invalid or too short duration. Please use format 'X hours' or 'Y minutes' (min 15 min):", "HTML");
                 }
                 
