@@ -22,11 +22,11 @@ const MAJOR_CITIES = [
 ].sort();
 
 // --- Razorpay Initialization ---
-// NOTE: Hardcoded keys below for immediate testing/debugging as requested.
-// REVERT THIS for production and use environment variables (`process.env.RAZORPAY_KEY_ID`, etc.)
+// NOTE: Reverting to environment variables. Ensure these variables are correctly set
+// in your Vercel environment to enable order creation.
 const razorpay = new Razorpay({
-    key_id: 'rzp_test_Rb8uedVgshWFou', // User-provided Test Key ID
-    key_secret: 'lgil1rvoEMzuGEeUX26vn5PE', // User-provided Test Key Secret
+    key_id: process.env.RAZORPAY_KEY_ID, // Reads from environment variable
+    key_secret: process.env.RAZORPAY_KEY_SECRET, // Reads from environment variable
 });
 
 // --- MESSAGES (Updated to use HTML tags for robustness) ---
@@ -2719,3 +2719,5 @@ app.get('/', (req, res) => {
 module.exports = app;
 // Export cron function so Vercel can run it
 module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
+// Exported for manual payment verification testing
+module.exports.commitFinalBookingBatch = commitFinalBookingBatch;
