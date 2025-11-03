@@ -1118,6 +1118,175 @@ async function handleShowLiveLocation(chatId, text) {
     }
 }
 
+// --- FIX: Added Missing handleBookingInput function ---
+async function handleBookingInput(chatId, text, state) {
+    try {
+        const booking = state.data;
+        
+        if (state.state === 'AWAITING_PASSENGER_DETAILS') {
+            const passengerMatch = text.match(/([^\/]+)\s*\/\s*(\d+)\s*\/\s*(\d+)/i);
+            if (!passengerMatch) return await sendMessage(chatId, MESSAGES.booking_details_error, "HTML");
+
+            const name = passengerMatch[1].trim();
+            const age = passengerMatch[2].trim();
+            const aadhar = passengerMatch[3].trim();
+            
+            // Assume Aadhar verification is successful for now (as the service is WIP)
+            
+            booking.passengers.push({ name, age, aadhar, gender: booking.gender, seat: booking.seatNo });
+            
+            await saveAppState(chatId, 'AWAITING_BOOKING_ACTION', booking);
+            
+            const keyboard = {
+                inline_keyboard: [
+                    [{ text: "➕ Add Another Passenger", callback_data: "cb_add_passenger" }],
+                    [{ text: "✅ Complete Booking", callback_data: "cb_book_finish" }]
+                ]
+            };
+            await sendMessage(chatId, MESSAGES.booking_passenger_prompt.replace('{count}', booking.passengers.length).replace('{seatNo}', booking.seatNo), "HTML", keyboard);
+        }
+    } catch (error) {
+        console.error('❌ handleBookingInput error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END FIX ---
+
+// --- NEW DEFINITION: handleStaffDelegation ---
+async function handleStaffDelegation(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'owner') {
+        return await sendMessage(chatId, MESSAGES.owner_permission_denied);
+    }
+
+    const assignMatch = text.match(/assign manager\s+(\d+)/i);
+    const revokeMatch = text.match(/revoke manager\s+(\d+)/i);
+    const db = getFirebaseDb();
+
+    let targetChatId, newRole;
+
+    if (assignMatch) {
+        targetChatId = assignMatch[1];
+        newRole = 'manager';
+    } else if (revokeMatch) {
+        targetChatId = revokeMatch[1];
+        newRole = 'user';
+    } else {
+        return await sendMessage(chatId, MESSAGES.owner_invalid_format, "HTML");
+    }
+
+    try {
+        const targetRef = db.collection('users').doc(targetChatId);
+        const targetDoc = await targetRef.get();
+
+        if (!targetDoc.exists) {
+            return await sendMessage(chatId, `❌ User with Chat ID <b>${targetChatId}</b> is not registered.`);
+        }
+
+        await targetRef.update({ role: newRole });
+
+        if (newRole === 'manager') {
+            await sendMessage(chatId, MESSAGES.owner_staff_assigned.replace('{chatId}', targetChatId), "HTML");
+        } else {
+            await sendMessage(chatId, MESSAGES.owner_staff_revoked.replace('{chatId}', targetChatId), "HTML");
+        }
+
+    } catch (e) {
+        console.error('❌ Staff Delegation Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END NEW DEFINITION ---
+
+// --- NEW DEFINITION: handleUserShareLocation (WIP) ---
+async function handleUserShareLocation(chatId) {
+    await sendMessage(chatId, MESSAGES.user_share_location_wip, "HTML");
+}
+// --- END NEW DEFINITION ---
+
+// --- NEW DEFINITION: handleAadharApiSetupInput ---
+async function handleAadharApiSetupInput(chatId, text) {
+    const urlRegex = /^(http|https):\/\/[^ "]+$/;
+    const db = getFirebaseDb();
+    
+    if (!text.match(urlRegex)) {
+        return await sendMessage(chatId, "❌ Invalid URL format. Try again:", "HTML");
+    }
+
+    try {
+        await db.collection('settings').doc('aadhar_verification').set({
+            endpoint_url: text.trim(),
+            updated_at: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.aadhar_api_success.replace('{url}', text.trim()), "HTML");
+    } catch (e) {
+        console.error('❌ Aadhar API Setup Error:', e.message);
+        await sendMessage(chatId, MESSAGES.db_error + " Failed to save Aadhar API URL.");
+    }
+}
+// --- END NEW DEFINITION ---
+
+// --- NEW DEFINITION: handleStartTrackingFlow ---
+async function handleStartTrackingFlow(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+        return await sendMessage(chatId, "❌ You do not have permission to start tracking.");
+    }
+    
+    await saveAppState(chatId, 'MANAGER_TRACKING_BUS_ID', {});
+    await sendMessage(chatId, MESSAGES.manager_tracking_prompt, "HTML");
+}
+// --- END NEW DEFINITION ---
+
+// --- NEW DEFINITION: handleTrackingAction (start/stop button logic) ---
+async function handleTrackingAction(chatId, action, busID) {
+    const db = getFirebaseDb();
+    const busRef = db.collection('buses').doc(busID);
+    const busDoc = await busRef.get();
+
+    if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`, "HTML");
+    const busData = busDoc.data();
+
+    if (action === 'start_live') {
+        const state = await getAppState(chatId);
+        const data = state.data;
+        
+        const durationMs = parseDurationToMs(data.trackingDuration);
+        const stopTime = new Date(Date.now() + durationMs);
+        const stopTimeStr = stopTime.toLocaleTimeString('en-IN');
+        
+        // 1. Update Bus Status to departed and activate tracking
+        await busRef.update({ 
+            is_tracking: true,
+            status: 'departed',
+            last_location_name: data.trackingLocation, // Use manager's initial location
+            tracking_stop_time: admin.firestore.Timestamp.fromDate(stopTime),
+            last_location_time: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        await saveAppState(chatId, 'MANAGER_AWAITING_LIVE_ACTION', { busID: busID });
+
+        // 2. Notify all confirmed passengers for this route (WIP/Conceptual)
+        // ... (Notification logic is conceptual and simplified here)
+
+        await sendMessage(chatId, MESSAGES.manager_tracking_started.replace('{busID}', busID).replace('{stopTime}', stopTimeStr), "HTML");
+
+
+    } else if (action === 'stop') {
+        // 1. Update Bus Status to arrived and deactivate tracking
+        await busRef.update({ 
+            is_tracking: false,
+            status: 'arrived',
+            tracking_stop_time: admin.firestore.FieldValue.delete(),
+        });
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.manager_tracking_stopped.replace('{busID}', busID), "HTML");
+    }
+}
+// --- END NEW DEFINITION ---
+
 
 async function handleManagerInput(chatId, text, state) {
     const db = getFirebaseDb();
@@ -1343,6 +1512,12 @@ async function handleManagerInput(chatId, text, state) {
                     response = MESSAGES.manager_add_bus_boarding_invalid;
                 }
                 break;
+                
+            case 'MANAGER_AADHAR_API_SETUP': 
+                 // This state is handled by a separate function
+                 await handleAadharApiSetupInput(chatId, text);
+                 return;
+
         }
 
         await saveAppState(chatId, nextState, data);
