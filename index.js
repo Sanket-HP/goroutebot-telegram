@@ -2173,6 +2173,11 @@ async function createPaymentOrder(chatId, bookingData) {
                 busID: bookingData.busID,
             }
         });
+        
+        // CRITICAL CHECK: Ensure order creation was successful before proceeding
+        if (!order || !order.id) {
+             throw new Error("Razorpay returned an invalid or empty order object. Check API keys and permissions.");
+        }
 
         // 2. Save payment session data
         const uniqueBookingId = `BOOK${Date.now().toString().slice(-6)}`;
@@ -2209,10 +2214,11 @@ async function createPaymentOrder(chatId, bookingData) {
         await sendMessage(chatId, response, "HTML");
 
     } catch (e) {
+        // IMPROVED LOGGING: This is the key change to help diagnose the invalid key issue.
         console.error("Razorpay Error:", e.message);
         await unlockSeats(bookingData);
         await saveAppState(chatId, 'IDLE', {});
-        await sendMessage(chatId, "❌ Failed to create payment order. Seats released. Please try again.");
+        await sendMessage(chatId, "❌ Failed to create payment order. Seats released. This is often caused by incorrect **Razorpay API Keys** (ID/Secret). Check your server logs for the full error.");
     }
 }
 
@@ -2353,8 +2359,8 @@ async function handleBookingInfo(chatId) {
             const seats = booking.seats.map(s => s.seatNo).join(', ');
             
             bookingList += `• <b>${doc.id}</b> (${booking.busID})\n`;
-            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
-            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
+            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
+            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
         });
 
         await sendMessage(chatId, bookingList + '💡 Use "Get ticket BOOKID" or "Check status BOOKID".', "HTML");
