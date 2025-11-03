@@ -1833,6 +1833,12 @@ async function handleUserMessage(chatId, text, user) {
     }
 
     if (state.state !== 'IDLE') {
+        // FIX: Handle the profile details command directly in the state block since new users start in 'unregistered' but need to input this while in the flow.
+        if (textLower.startsWith('my profile details')) {
+            await handleProfileUpdate(chatId, text);
+            return;
+        }
+        
         if (state.state === 'AWAITING_SEARCH_FROM' || state.state === 'AWAITING_SEARCH_TO' || state.state === 'AWAITING_SEARCH_DATE') {
              await handleSearchTextInput(chatId, text, state);
         } else if (state.state.startsWith('AWAITING_PASSENGER') || state.state.startsWith('AWAITING_GENDER')) {
@@ -1909,6 +1915,8 @@ async function handleUserMessage(chatId, text, user) {
     }
     // GENERAL COMMANDS
     else if (textLower.startsWith('my profile details')) {
+        // This is handled in the state check block above for new users,
+        // but included here for completeness for active users
         await handleProfileUpdate(chatId, text);
     }
     else if (textLower === 'book bus' || textLower === '/book') {
