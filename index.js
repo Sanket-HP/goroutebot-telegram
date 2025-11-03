@@ -224,6 +224,15 @@ async function sendMessage(chatId, text, parseMode = 'HTML', replyMarkup = null)
         console.error("❌ CRITICAL: TELEGRAM_TOKEN environment variable is missing. Cannot send message.");
         return; 
     }
+
+    // --- DEFENSIVE MESSAGE GUARD: Prevent "message text is empty" error ---
+    if (!text || text.trim() === '') {
+        console.error(`❌ CRITICAL: Attempted to send an empty message to ${chatId}. Sending fallback.`);
+        text = "❌ An internal application error occurred. The response message was empty. Please try /start again.";
+        // Ensure the empty message is never sent to Telegram
+    }
+    // --- END DEFENSIVE MESSAGE GUARD ---
+
     try {
         const payload = { chat_id: String(chatId), text: text, parse_mode: parseMode };
         if (replyMarkup) payload.reply_markup = replyMarkup;
@@ -767,6 +776,53 @@ async function handleFareAlertSetup(chatId, text) {
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
+
+// --- FIX: Added Missing handleUserProfile definition ---
+async function handleUserProfile(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('users').doc(String(chatId)).get();
+
+        if (doc.exists) {
+            const user = doc.data();
+            const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
+            
+            const profileText = `👤 <b>Your Profile</b>\n\n` +
+                                 `<b>Name:</b> ${user.name || 'Not set'}\n` +
+                                 `<b>Chat ID:</b> ${user.chat_id}\n` +
+                                 `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
+                                 `<b>Aadhar:</b> ${user.aadhar || 'Not set'}\n` +
+                                 `<b>Role:</b> ${user.role || 'user'}\n` +
+                                 `<b>Status:</b> ${user.status || 'N/A'}\n` +
+                                 `<b>Member since:</b> ${joinDate}`;
+            
+            await sendMessage(chatId, profileText, "HTML");
+        } else {
+            await sendMessage(chatId, MESSAGES.user_not_found);
+        }
+
+    } catch (error) {
+        console.error('❌ Error in handleUserProfile:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// --- END FIX ---
+
+// --- FIX: Added Missing handleUpdatePhoneNumberCallback definition ---
+async function handleUpdatePhoneNumberCallback(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole === 'unregistered' || userRole === 'error') {
+        return await sendMessage(chatId, "❌ You must register first to update your profile. Send /start.");
+    }
+    
+    try {
+        await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
+        await sendMessage(chatId, MESSAGES.update_phone_prompt, "HTML");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error + " Could not initiate phone update.");
+    }
+}
+// --- END FIX ---
 
 /* --------------------- Core Handlers (Remaining) ---------------------- */
 
