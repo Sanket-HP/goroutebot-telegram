@@ -464,7 +464,7 @@ async function sendLiveLocationUpdates() {
             });
 
             if (managerId) {
-                const managerNotification = MESSAGES.tracking_passenger_info
+                const managerNotification = MESSAGES.passenger_tracking_info
                     .replace('{busID}', busID)
                     .replace('{location}', randomLocation)
                     .replace('{time}', notificationTime)
