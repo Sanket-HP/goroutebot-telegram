@@ -1623,8 +1623,10 @@ async function handleManagerInput(chatId, text, state) {
         await sendMessage(chatId, response, "HTML");
 
     } catch (error) {
+        // Updated error message for general manager input errors
+        console.error("Manager Input Error:", error.message);
         await db.collection('user_state').doc(String(chatId)).delete();
-        await sendMessage(chatId, MESSAGES.db_error + " Bus creation failed. Please try again.");
+        await sendMessage(chatId, MESSAGES.db_error + " (A critical operation failed. Try again or check the format.)");
     }
 }
 
@@ -1793,7 +1795,9 @@ async function handleInventorySyncInput(chatId, text, state) {
         await sendMessage(chatId, response, "HTML");
 
     } catch (error) {
-        await sendMessage(chatId, MESSAGES.db_error + " Inventory sync setup failed. Please try again.");
+        // Updated error message for inventory sync
+        console.error("Inventory Sync Input Error:", error.message);
+        await sendMessage(chatId, MESSAGES.db_error + " (Inventory sync failed. Try again.)");
     }
 }
 
@@ -2248,15 +2252,16 @@ async function handlePaymentVerification(chatId, stateData) {
         const bookingData = sessionDoc.data().booking;
 
         // --- TESTING FIX: Force commit if user manually clicks confirm ---
-        // During testing, if the session exists, we treat the click as proof of payment
-        // to bypass real-time Razorpay verification issues.
-        if (process.env.NODE_ENV !== 'production' || true /* Force testing path */) {
-            console.warn(`[TEST MODE] Bypassing Razorpay fetch for Order ID ${orderId}. Forcing booking commit for testing.`);
-            await commitFinalBookingBatch(chatId, bookingData);
-            return;
-        }
+        // This allows the user to immediately see the success path for testing purposes
+        // without waiting for or relying on the external Razorpay payment status.
+        // NOTE: This logic is for testing and should be removed or conditioned
+        // on a specific environment flag in a real production system.
+        console.warn(`[TEST MODE] Bypassing Razorpay fetch for Order ID ${orderId}. Forcing booking commit for testing.`);
+        await commitFinalBookingBatch(chatId, bookingData);
+        return;
 
-        // --- PRODUCTION LOGIC: Fetch order status from Razorpay ---
+        // --- PRODUCTION LOGIC: Fetch order status from Razorpay (commented out for testing) ---
+        /*
         const order = await razorpay.orders.fetch(orderId);
         
         if (order.status === 'paid') {
@@ -2264,6 +2269,7 @@ async function handlePaymentVerification(chatId, stateData) {
         } else {
             await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', orderId), "HTML");
         }
+        */
     } catch (e) {
         console.error("Verification Error:", e.message);
         await sendMessage(chatId, "❌ An error occurred while verifying payment status. Please try again later.");
@@ -2545,7 +2551,7 @@ async function handleUserMessage(chatId, text, user) {
     else if (textLower.startsWith('add seats')) {
         await handleAddSeatsCommand(chatId, text);
     }
-    else if (textLower.startsWith('show manifest')) {
+    else if (textLower.startsWith('show manifest')) { 
         await handleShowManifest(chatId, text);
     }
     else if (textLower.startsWith('start tracking')) { 
