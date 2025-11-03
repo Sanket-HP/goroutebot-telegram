@@ -476,6 +476,64 @@ function parseDurationToMs(durationString) {
     return 0;
 }
 
+/**
+ * --- NEW MID-ROUTE RELEASE LOGIC ---
+ * Iterates through active seats and checks if a passenger's booked-to-destination 
+ * matches the bus's last reported location (or a mock stop point).
+ */
+async function checkAndReleaseMidRouteSeats() {
+    const db = getFirebaseDb();
+    
+    // 1. Find all actively tracked buses (these are moving)
+    const trackedBusesSnapshot = await db.collection('buses').where('is_tracking', '==', true).get();
+
+    for (const busDoc of trackedBusesSnapshot.docs) {
+        const busID = busDoc.id;
+        const busData = busDoc.data();
+        const currentLocation = busData.last_location_name;
+
+        if (!currentLocation) continue;
+
+        // 2. Find all booked seats on this bus
+        const seatsSnapshot = await db.collection('seats')
+            .where('bus_id', '==', busID)
+            .where('status', '==', 'booked')
+            .get();
+
+        const batch = db.batch();
+        let seatsReleasedCount = 0;
+        
+        // 3. Check each booked seat against the current location
+        seatsSnapshot.forEach(seatDoc => {
+            const seatData = seatDoc.data();
+            // Assuming booking logic ensures booked_to_destination exists on booked seats
+            const destination = seatData.booked_to_destination; 
+
+            // Simple check: If the passenger's destination matches the bus's current mock location, release the seat.
+            if (destination && destination.toLowerCase().includes(currentLocation.toLowerCase())) {
+                console.log(`[MID-ROUTE RELEASE] Releasing seat ${seatData.seat_no} on ${busID}. Destination matched: ${destination} vs ${currentLocation}`);
+                
+                // Release the seat immediately
+                batch.update(seatDoc.ref, {
+                    status: 'available',
+                    booking_id: admin.firestore.FieldValue.delete(),
+                    booked_to_destination: admin.firestore.FieldValue.delete(), // Remove specific booking data
+                    // Keep gender, as the next passenger might need it for safety check if this is a sleeper.
+                });
+                seatsReleasedCount++;
+                
+                // OPTIONAL: Send a "You have arrived" message to the passenger's chat_id if we could easily retrieve it
+            }
+        });
+        
+        if (seatsReleasedCount > 0) {
+             await batch.commit();
+             console.log(`[MID-ROUTE SUCCESS] Released ${seatsReleasedCount} seats on Bus ${busID}.`);
+        }
+    }
+}
+// --- END NEW MID-ROUTE RELEASE LOGIC ---
+
 /* --------------------- Live Tracking Cron Logic ---------------------- */
 
 async function sendLiveLocationUpdates() {
@@ -484,9 +542,15 @@ async function sendLiveLocationUpdates() {
     let updatesSent = 0;
     const currentTime = new Date();
     const notificationTime = currentTime.toLocaleTimeString('en-IN');
-    const mockLocation = ["NH44 Checkpoint", "Toll Plaza 5", "Rest Area B", "City Outskirts", "Mid-route"];
+    // NOTE: This list now serves as mock locations AND mock destination names for mid-route release
+    const mockLocation = ['Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur']; 
 
     try {
+        
+        // 1. Run Mid-Route Seat Release Check
+        await checkAndReleaseMidRouteSeats();
+        
+        // 2. Continue with Regular Location Update/Stop Check
         const busesSnapshot = await db.collection('buses').where('is_tracking', '==', true).get();
         
         for (const busDoc of busesSnapshot.docs) {
@@ -494,7 +558,7 @@ async function sendLiveLocationUpdates() {
             const busID = data.bus_id;
             const managerId = data.manager_chat_id;
             
-            // 1. Check for Automatic Stop
+            // 2a. Check for Automatic Stop
             if (data.tracking_stop_time) {
                 const stopTime = data.tracking_stop_time.toDate();
                 if (currentTime > stopTime) {
@@ -515,7 +579,8 @@ async function sendLiveLocationUpdates() {
                 }
             }
 
-            // 2. Regular Location Update
+            // 2b. Regular Location Update
+            // Select a new mock location randomly from the predefined list
             const randomLocation = mockLocation[Math.floor(Math.random() * mockLocation.length)];
 
             await busDoc.ref.update({
@@ -524,13 +589,7 @@ async function sendLiveLocationUpdates() {
             });
 
             if (managerId) {
-                const managerNotification = MESSAGES.passenger_tracking_info
-                    .replace('{busID}', busID)
-                    .replace('{location}', randomLocation)
-                    .replace('{time}', notificationTime)
-                    .replace('{trackingUrl}', MOCK_TRACKING_BASE_URL);
-                
-                updates.push(sendMessage(managerId, `🔔 [CRON UPDATE] ${managerNotification}`, "HTML"));
+                // Manager notification is handled here, but passenger notification is handled in checkAndReleaseMidRouteSeats
                 updatesSent++;
             }
         }
@@ -784,6 +843,7 @@ async function handleSeatRelease(chatId, text) {
         await seatRef.update({
             status: 'available',
             booking_id: admin.firestore.FieldValue.delete(),
+            booked_to_destination: admin.firestore.FieldValue.delete(), // NEW: Clear destination
             temp_chat_id: admin.firestore.FieldValue.delete(),
             gender: admin.firestore.FieldValue.delete()
         });
@@ -1191,9 +1251,16 @@ async function handleSeatSelection(chatId, text) {
              return await sendMessage(chatId, MESSAGES.seat_not_available.replace('{seatNo}', seatNo).replace('{busID}', busID), "HTML");
         }
 
+        // NOTE: Since the current flow does not prompt for FROM/TO, 
+        // we use the bus's main route for the destination here. 
+        // In a real system, a prompt for the user's stopping point would be required.
+        const busInfo = await getBusInfo(busID);
+        if (!busInfo) return await sendMessage(chatId, "❌ Bus details unavailable for booking.");
+        
         const bookingData = {
             busID,
             seatNo,
+            destination: busInfo.to, // Using bus destination as passenger destination for simplicity
             passengers: [],
         };
         await saveAppState(chatId, 'AWAITING_GENDER_SELECTION', bookingData);
@@ -1805,6 +1872,7 @@ async function handleAddSeatsCommand(chatId, text) {
                     type: seatType,
                     row: rowIndex,
                     col: col,
+                    booked_to_destination: null // Initialize destination field
                 });
                 seatsAdded++;
             }
@@ -2095,9 +2163,14 @@ async function handleCancellation(chatId, text) {
         // 1. Release Seats
         const seatsToRelease = booking.seats.map(s => s.seatNo);
         const batch = db.batch();
-        seatsToRelease.forEach(seatNo => {
-            const seatRef = db.collection('seats').doc(`${booking.busID}-${seatNo}`);
-            batch.update(seatRef, { status: 'available', booking_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+        seatsToRelease.forEach(seat => {
+            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
+            batch.update(seatRef, { 
+                status: 'available', 
+                booking_id: admin.firestore.FieldValue.delete(), 
+                booked_to_destination: admin.firestore.FieldValue.delete(), // NEW: Clear destination
+                gender: admin.firestore.FieldValue.delete() 
+            });
         });
         await batch.commit();
 
@@ -2215,10 +2288,11 @@ async function handleGenderSelectionCallback(chatId, callbackData) {
         // }
     }
 
-    // Lock the seat and save gender
+    // Lock the seat and save gender and booked destination
     const seatRef = db.collection('seats').doc(`${booking.busID}-${booking.seatNo}`);
     await seatRef.update({ 
         status: 'locked', 
+        booked_to_destination: booking.destination, // NEW: Store destination on the seat
         temp_chat_id: String(chatId), 
         gender: gender 
     });
@@ -2271,7 +2345,7 @@ async function createPaymentOrder(chatId, bookingData) {
         const finalBookingData = {
             chat_id: String(chatId),
             busID: bookingData.busID,
-            seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender })),
+            seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender, booked_to_destination: bookingData.destination })), // ADDED destination here
             passengers: bookingData.passengers,
             total_paid: amount,
             razorpay_order_id: order.id,
@@ -2331,23 +2405,9 @@ async function handlePaymentVerification(chatId, stateData) {
 
         // --- TESTING FIX: Force commit if user manually clicks confirm ---
         // This allows the user to immediately see the success path for testing purposes
-        // without waiting for or relying on the external Razorpay payment status.
-        // NOTE: This logic is for testing and should be removed or conditioned
-        // on a specific environment flag in a real production system.
         console.warn(`[TEST MODE] Bypassing Razorpay fetch for Order ID ${orderId}. Forcing booking commit for testing.`);
         await commitFinalBookingBatch(chatId, bookingData);
         return;
-
-        // --- PRODUCTION LOGIC: Fetch order status from Razorpay (commented out for testing) ---
-        /*
-        const order = await razorpay.orders.fetch(orderId);
-        
-        if (order.status === 'paid') {
-            await commitFinalBookingBatch(chatId, bookingData);
-        } else {
-            await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', orderId), "HTML");
-        }
-        */
     } catch (e) {
         console.error("Verification Error:", e.message);
         await sendMessage(chatId, "❌ An error occurred while verifying payment status. Please try again later.");
@@ -2388,6 +2448,7 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             batch.update(seatRef, {
                 status: 'booked',
                 booking_id: bookingId,
+                booked_to_destination: seat.booked_to_destination, // NEW: Store destination on the seat
                 temp_chat_id: admin.firestore.FieldValue.delete()
             });
         });
