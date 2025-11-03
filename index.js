@@ -11,7 +11,8 @@ const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`;
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 // --- Mock Tracking URL (Conceptual Client Link) ---
-const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app";
+// FIX: Ensure the URL ends with a trailing slash for correct path concatenation.
+const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app/"; 
 
 // --- Predefined City List (Used for suggested buttons only) ---
 const MAJOR_CITIES = [
