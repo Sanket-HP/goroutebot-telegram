@@ -119,7 +119,7 @@ Time: {dateTime}
     manager_tracking_location_prompt: "📍 <b>Current Location:</b> Where is the bus departing from? (e.g., <pre>Mumbai Central Bus Stand</pre>):",
     manager_tracking_duration_prompt: "⏳ <b>Sharing Duration:</b> For how long should the location tracking run? (e.g., <pre>3 hours</pre>, <pre>45 minutes</pre>):",
     manager_tracking_session_active: "🚌 <b>Bus {busID} Tracking Session Active.</b> Ends at: <b>{stopTime}</b>. Select an action below:",
-    manager_tracking_started: "✅ <b>LIVE Location Sharing Started for {busID}!</b>\n\nPassengers have been notified. Tracking will automatically stop at <b>{stopTime}</b>.",
+    manager_tracking_started: "✅ <b>LIVE Location Sharing Started for {busID}!</b>\n\n📍 Track your journey: <a href='{trackingUrl}?bus={busID}'>Tap here for live map</a>\n\nPassengers have been notified. Tracking will automatically stop at <b>{stopTime}</b>.", // MODIFIED: Added Tracking Link for Manager
     manager_tracking_stopped: "⏹️ <b>Tracking Stopped for {busID}.</b> The journey status is now 'Arrived'.",
     tracking_auto_stopped: "⏰ <b>Tracking Session Ended.</b> Bus {busID} tracking automatically stopped at {time} after {duration} and status set to 'Arrived'.",
     tracking_not_tracking: "❌ Bus <b>{busID}</b> has not started tracking yet or the route is finished. Please check with the operator.",
@@ -399,6 +399,51 @@ async function sendManagerNotification(busID, type, details) {
         }
     } catch (e) {
         console.error("Error sending manager notification:", e.message);
+    }
+}
+
+/**
+ * Sends a notification to all confirmed passengers on a specific bus route
+ * notifying them that tracking has started.
+ * @param {string} busID 
+ * @param {string} location 
+ * @param {string} time 
+ */
+async function notifyPassengersOfTrackingStart(busID, location, time) {
+    const db = getFirebaseDb();
+    
+    try {
+        // 1. Find all confirmed bookings for this bus
+        const bookingsSnapshot = await db.collection('bookings')
+            .where('busID', '==', busID)
+            .where('status', '==', 'confirmed')
+            .get();
+
+        if (bookingsSnapshot.empty) return;
+
+        const updates = [];
+        const trackingUrl = MOCK_TRACKING_BASE_URL;
+
+        const notificationText = MESSAGES.passenger_tracking_info
+            .replace('{busID}', busID)
+            .replace('{location}', location)
+            .replace('{time}', time)
+            .replace('{trackingUrl}', trackingUrl);
+
+        // 2. Send the message to each unique passenger chatId
+        const notifiedChats = new Set();
+        bookingsSnapshot.forEach(doc => {
+            const chatId = doc.data().chat_id;
+            if (!notifiedChats.has(chatId)) {
+                updates.push(sendMessage(chatId, notificationText, "HTML"));
+                notifiedChats.add(chatId);
+            }
+        });
+
+        await Promise.all(updates);
+
+    } catch (e) {
+        console.error(`Error notifying passengers for bus ${busID}:`, e.message);
     }
 }
 
@@ -1343,7 +1388,8 @@ async function handleTrackingAction(chatId, action, busID) {
         const durationMs = parseDurationToMs(data.trackingDuration);
         const stopTime = new Date(Date.now() + durationMs);
         const stopTimeStr = stopTime.toLocaleTimeString('en-IN');
-        
+        const trackingUrl = MOCK_TRACKING_BASE_URL; // Required for manager message
+
         // 1. Update Bus Status to departed and activate tracking
         await busRef.update({ 
             is_tracking: true,
@@ -1353,12 +1399,20 @@ async function handleTrackingAction(chatId, action, busID) {
             last_location_time: admin.firestore.FieldValue.serverTimestamp()
         });
 
+        // 2. Notify ALL confirmed passengers for this bus (New requirement)
+        const lastUpdateTime = new Date().toLocaleTimeString('en-IN');
+        await notifyPassengersOfTrackingStart(busID, data.trackingLocation, lastUpdateTime);
+
+
         await saveAppState(chatId, 'MANAGER_AWAITING_LIVE_ACTION', { busID: busID });
 
-        // 2. Notify all confirmed passengers for this route (WIP/Conceptual)
-        // ... (Notification logic is conceptual and simplified here)
-
-        await sendMessage(chatId, MESSAGES.manager_tracking_started.replace('{busID}', busID).replace('{stopTime}', stopTimeStr), "HTML");
+        // 3. Notify Manager (using the message which now includes the link)
+        const managerMessage = MESSAGES.manager_tracking_started
+            .replace('{busID}', busID)
+            .replace('{trackingUrl}', trackingUrl)
+            .replace('{stopTime}', stopTimeStr);
+            
+        await sendMessage(chatId, managerMessage, "HTML");
         return; // Explicit return
 
 
