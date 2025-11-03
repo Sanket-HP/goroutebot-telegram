@@ -166,6 +166,10 @@ Time: {dateTime}
     manager_invalid_layout: "❌ Invalid layout. Please enter <pre>Seater</pre>, <pre>Sleeper</pre>, or <pre>Both</pre>.",
     manager_invalid_seat_type: "❌ Invalid seat type. Please enter <pre>Sleeper Upper</pre>, <pre>Sleeper Lower</pre>, or <pre>Seater</pre>.",
 
+    // Manager Notifications (MISSING MESSAGES - ADDED HERE)
+    manager_notification_booking: "🔔 <b>NEW BOOKING ALERT ({busID})</b>\n\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}\n\nUse <pre>show manifest {busID}</pre> to view the full list.",
+    manager_notification_cancellation: "🗑️ <b>CANCELLATION ALERT ({busID})</b>\n\nBooking ID: {bookingId}\nSeats: {seats}\nTime: {dateTime}\n\nSeats have been automatically released.",
+
     // General
     db_error: "❌ CRITICAL ERROR: The bot's database is not connected. Please contact support.",
     unknown_command: "🤔 I don't understand that command. Type <b>/help</b> for a list of available options.",
@@ -346,10 +350,14 @@ async function getBusInfo(busID) {
         const data = snapshot.docs[0].data();
         return {
             busID: data.bus_id,
+            busName: data.bus_name, // Added busName
+            busType: data.bus_type, // Added busType
+            price: data.price,      // Added price
             from: data.from,
             to: data.to,
             date: data.departure_time.split(' ')[0],
-            time: data.departure_time.split(' ')[1]
+            time: data.departure_time.split(' ')[1],
+            boardingPoints: data.boarding_points || []
         };
     } catch (e) {
         console.error("Error fetching bus info:", e.message);
@@ -365,7 +373,7 @@ async function sendManagerNotification(busID, type, details) {
         if (!busDoc.exists || !busDoc.data().manager_chat_id) return; 
 
         const managerChatId = busDoc.data().manager_chat_id;
-        const now = details.dateTime;
+        const now = details.dateTime || new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
         let notificationText = '';
         if (type === 'BOOKING') {
@@ -373,7 +381,7 @@ async function sendManagerNotification(busID, type, details) {
             notificationText = MESSAGES.manager_notification_booking
                 .replace('{busID}', busID)
                 .replace('{seats}', seatList)
-                .replace('{passengerName}', details.passengerName)
+                .replace('{passengerName}', details.passengerName || 'A Passenger')
                 .replace('{dateTime}', now);
         } else if (type === 'CANCELLATION') {
             const seatsList = details.seats.join(', ');
@@ -1603,9 +1611,9 @@ async function handleManagerInput(chatId, text, state) {
                 break;
                 
             case 'MANAGER_AADHAR_API_SETUP': 
-                 // This state is handled by a separate function
-                 await handleAadharApiSetupInput(chatId, text);
-                 return;
+                // This state is handled by a separate function
+                await handleAadharApiSetupInput(chatId, text);
+                return;
 
         }
 
@@ -1787,6 +1795,575 @@ async function handleInventorySyncInput(chatId, text, state) {
     }
 }
 
+/* --------------------- MISSING HANDLERS DEFINITION ---------------------- */
+
+// 1. handleProfileUpdate
+async function handleProfileUpdate(chatId, text) {
+    const match = text.match(/my profile details\s+([^/]+)\s*\/\s*([^/]+)\s*\/\s*(\d+)/i);
+    if (!match) return await sendMessage(chatId, MESSAGES.profile_update_error, "HTML");
+
+    const [_, name, aadhar, phone] = match;
+    const db = getFirebaseDb();
+
+    try {
+        const userRef = db.collection('users').doc(String(chatId));
+        const userDoc = await userRef.get();
+
+        if (!userDoc.exists) return await startUserRegistration(chatId, { first_name: name.trim() });
+
+        await userRef.update({
+            name: name.trim(),
+            aadhar: aadhar.trim(),
+            phone: phone.trim(),
+            status: 'active'
+        });
+
+        await sendMessage(chatId, MESSAGES.profile_updated, "HTML");
+        await sendHelpMessage(chatId);
+
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// 2. handleSearchTextInput
+async function handleSearchTextInput(chatId, text, state) {
+    const db = getFirebaseDb();
+    let data = state.data;
+    const city = text.trim();
+    let nextState = '';
+    let response = '';
+    let keyboard = null;
+
+    if (!city) return await sendMessage(chatId, "❌ Please type a city name.");
+
+    if (state.state === 'AWAITING_SEARCH_FROM') {
+        data.from = city;
+        
+        const snapshot = await db.collection('buses').where('from', '==', city).get();
+        const availableDestinations = new Set();
+        snapshot.forEach(doc => availableDestinations.add(doc.data().to));
+
+        const dests = Array.from(availableDestinations).sort();
+        const suggestedDests = dests.slice(0, 6);
+
+        if (dests.length === 0) {
+            return await sendMessage(chatId, MESSAGES.search_route_not_found.replace('{city}', city), "HTML");
+        }
+        
+        keyboard = {
+            inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
+        };
+        nextState = 'AWAITING_SEARCH_TO';
+        response = MESSAGES.search_to;
+
+    } else if (state.state === 'AWAITING_SEARCH_TO') {
+        data.to = city;
+
+        keyboard = {
+            inline_keyboard: [
+                [{ text: "📅 Today", callback_data: `cb_search_date_today` }],
+                [{ text: "➡️ Tomorrow", callback_data: `cb_search_date_tomorrow` }],
+                [{ text: "🗓️ Pick Specific Date (WIP)", callback_data: `cb_search_date_specific` }],
+            ]
+        };
+        nextState = 'AWAITING_SEARCH_DATE';
+        response = MESSAGES.search_date;
+
+    } else if (state.state === 'AWAITING_SEARCH_DATE') {
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!city.match(dateRegex)) {
+            return await sendMessage(chatId, "❌ Invalid date format. Please use YYYY-MM-DD (e.g., 2025-12-25):");
+        }
+        data.date = city;
+        await saveAppState(chatId, 'IDLE', {});
+        return await showSearchResults(chatId, data.from, data.to, data.date);
+    }
+    
+    await saveAppState(chatId, nextState, data);
+    await sendMessage(chatId, response, "HTML", keyboard);
+}
+
+// 3. handlePhoneUpdateInput
+async function handlePhoneUpdateInput(chatId, text) {
+    const phone = text.replace(/[^0-9]/g, '');
+    const phoneRegex = /^\d{10}$/;
+    
+    if (!phone.match(phoneRegex)) {
+        return await sendMessage(chatId, MESSAGES.phone_invalid);
+    }
+
+    try {
+        const db = getFirebaseDb();
+        await db.collection('users').doc(String(chatId)).update({ phone: phone });
+        
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.phone_updated_success, "HTML");
+        await sendHelpMessage(chatId);
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// 4. handleGetTicket
+async function handleGetTicket(chatId, text) {
+    const match = text.match(/get ticket\s+(BOOK\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Get ticket BOOK123456</pre>", "HTML");
+
+    const bookingId = match[1].toUpperCase();
+
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('bookings').doc(bookingId).get();
+
+        if (!doc.exists || doc.data().status !== 'confirmed') {
+            return await sendMessage(chatId, MESSAGES.ticket_not_found.replace('{bookingId}', bookingId), "HTML");
+        }
+
+        const booking = doc.data();
+        const busInfo = await getBusInfo(booking.busID);
+        if (!busInfo) return await sendMessage(chatId, "❌ Bus information is unavailable.");
+
+        const response = MESSAGES.payment_confirmed_ticket
+            .replace('{busName}', busInfo.busName || 'N/A')
+            .replace('{busType}', busInfo.busType || 'N/A')
+            .replace('{from}', busInfo.from)
+            .replace('{to}', busInfo.to)
+            .replace('{journeyDate}', busInfo.date)
+            .replace('{departTime}', busInfo.time)
+            .replace('{seatList}', booking.seats.map(s => s.seatNo).join(', '))
+            .replace('{boardingPoints}', busInfo.boardingPoints.map(p => p.name).join(' / ') || 'N/A')
+            .replace('{name}', booking.passengers[0].name)
+            .replace('{phone}', booking.phone)
+            .replace('{orderId}', booking.razorpay_order_id)
+            .replace('{amount}', (booking.total_paid / 100).toFixed(2))
+            .replace('{dateTime}', booking.created_at.toDate().toLocaleString('en-IN'));
+
+        await sendMessage(chatId, response, "HTML");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// 5. handleCheckStatus
+async function handleCheckStatus(chatId, text) {
+    const match = text.match(/check status\s+(BOOK\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Check status BOOK123456</pre>", "HTML");
+
+    const bookingId = match[1].toUpperCase();
+
+    try {
+        const db = getFirebaseDb();
+        const doc = await db.collection('bookings').doc(bookingId).get();
+
+        if (!doc.exists) {
+            return await sendMessage(chatId, MESSAGES.ticket_not_found.replace('{bookingId}', bookingId), "HTML");
+        }
+
+        const booking = doc.data();
+
+        const response = MESSAGES.booking_status_info
+            .replace('{bookingId}', bookingId)
+            .replace('{busID}', booking.busID)
+            .replace('{seats}', booking.seats.map(s => s.seatNo).join(', '))
+            .replace('{status}', booking.status.toUpperCase())
+            .replace('{date}', booking.created_at.toDate().toLocaleDateString('en-IN'));
+
+        await sendMessage(chatId, response, "HTML");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// 6. handleSeatChangeRequest (WIP)
+async function handleSeatChangeRequest(chatId, text) {
+    const match = text.match(/request seat change\s+(BOOK\d+)\s+([A-Z0-9]+)/i);
+    if (!match) return await sendMessage(chatId, MESSAGES.seat_change_invalid, "HTML");
+
+    const bookingId = match[1].toUpperCase();
+    const newSeat = match[2].toUpperCase();
+
+    // In a real application, this would trigger a manager approval workflow.
+    const response = MESSAGES.seat_change_wip
+        .replace('{bookingId}', bookingId)
+        .replace('{newSeat}', newSeat);
+
+    await sendMessage(chatId, response, "HTML");
+}
+
+// 7. handleCancellation
+async function handleCancellation(chatId, text) {
+    const match = text.match(/cancel booking\s+(BOOK\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Cancel booking BOOK123456</pre>", "HTML");
+
+    const bookingId = match[1].toUpperCase();
+
+    try {
+        const db = getFirebaseDb();
+        const bookingRef = db.collection('bookings').doc(bookingId);
+        const bookingDoc = await bookingRef.get();
+        const booking = bookingDoc.data();
+
+        if (!bookingDoc.exists || booking.status !== 'confirmed') {
+            return await sendMessage(chatId, `❌ Booking <b>${bookingId}</b> is not confirmed or does not exist.`);
+        }
+
+        // 1. Release Seats
+        const seatsToRelease = booking.seats.map(s => s.seatNo);
+        const batch = db.batch();
+        seatsToRelease.forEach(seatNo => {
+            const seatRef = db.collection('seats').doc(`${booking.busID}-${seatNo}`);
+            batch.update(seatRef, { status: 'available', booking_id: admin.firestore.FieldValue.delete(), gender: admin.firestore.FieldValue.delete() });
+        });
+        await batch.commit();
+
+        // 2. Update Booking Status
+        await bookingRef.update({ 
+            status: 'cancelled',
+            cancellation_time: admin.firestore.FieldValue.serverTimestamp()
+        });
+
+        // 3. Send Notifications
+        const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+        await sendManagerNotification(booking.busID, 'CANCELLATION', { 
+            bookingId: bookingId, 
+            seats: seatsToRelease, 
+            dateTime: now 
+        });
+
+        await sendMessage(chatId, MESSAGES.booking_cancelled.replace('{bookingId}', bookingId).replace('{dateTime}', now), "HTML");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// 8. handleShowManifest
+async function handleShowManifest(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, "❌ Permission denied.");
+
+    const match = text.match(/show manifest\s+(BUS\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID.\nExample: <pre>Show manifest BUS101</pre>", "HTML");
+
+    const busID = match[1].toUpperCase();
+
+    try {
+        const db = getFirebaseDb();
+        const busDoc = await db.collection('buses').doc(busID).get();
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`);
+
+        const bookingSnapshot = await db.collection('bookings')
+            .where('busID', '==', busID)
+            .where('status', '==', 'confirmed')
+            .get();
+
+        if (bookingSnapshot.empty) {
+            return await sendMessage(chatId, MESSAGES.no_manifest.replace('{busID}', busID), "HTML");
+        }
+
+        let manifest = MESSAGES.manifest_header
+            .replace('{busID}', busID)
+            .replace('{from}', busDoc.data().from)
+            .replace('{to}', busDoc.data().to)
+            .replace('{date}', busDoc.data().departure_time.split(' ')[0])
+            .replace('{count}', bookingSnapshot.size);
+
+        bookingSnapshot.forEach(doc => {
+            const booking = doc.data();
+            booking.passengers.forEach(p => {
+                manifest += MESSAGES.manifest_entry
+                    .replace('{seat}', p.seat)
+                    .replace('{name}', p.name)
+                    .replace('{aadhar}', p.aadhar.slice(-4)) // Mask Aadhar
+                    .replace('{gender}', p.gender === 'F' ? '(Female 🚺)' : '(Male 🚹)');
+            });
+        });
+
+        await sendMessage(chatId, manifest, "HTML");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+// 9. handleStartTrackingCommand
+async function handleStartTrackingCommand(chatId, text) {
+    const match = text.match(/start tracking\s+(BUS\d+)/i);
+    const userRole = await getUserRole(chatId);
+
+    if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, "❌ Permission denied.");
+
+    if (match) {
+        const busID = match[1].toUpperCase();
+        // Skip straight to location input
+        await saveAppState(chatId, 'MANAGER_TRACKING_BUS_ID', { busID: busID }); // Temporarily set BUSID
+        await saveAppState(chatId, 'MANAGER_TRACKING_LOCATION', { busID: busID }); // Move to next step
+        return await sendMessage(chatId, MESSAGES.manager_tracking_location_prompt, "HTML");
+    } else {
+        // Fallback to the guided flow prompt
+        await handleStartTrackingFlow(chatId);
+    }
+}
+
+// 10. handlePassengerTracking
+async function handlePassengerTracking(chatId, text) {
+    const match = text.match(/track bus\s+(BUS\d+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Please specify Bus ID.\nExample: <pre>Track bus BUS101</pre>", "HTML");
+
+    await handleShowLiveLocation(chatId, text);
+}
+
+// 11. handleGenderSelectionCallback
+async function handleGenderSelectionCallback(chatId, callbackData) {
+    const state = await getAppState(chatId);
+    if (state.state !== 'AWAITING_GENDER_SELECTION') return await sendMessage(chatId, "❌ Invalid booking session. Please start over.");
+
+    const gender = callbackData.split('_').pop();
+    const booking = state.data;
+    const db = getFirebaseDb();
+
+    // Simulate safety check: check adjacent seat for gender mismatch
+    // (This simplified check assumes a standard 1A/1B sleeper layout or 2x2 seating, and requires seat geometry data - using a simple mock here)
+    if (gender === 'M') {
+        // Check if the seat is beside a female-occupied seat. (Simplified logic: always assume no violation for now)
+        // const adjacentSeat = getAdjacentSeat(booking.busID, booking.seatNo);
+        // if (adjacentSeat && adjacentSeat.gender === 'F') {
+        //     return await sendMessage(chatId, MESSAGES.safety_violation.replace('{seatNo}', booking.seatNo), "HTML");
+        // }
+    }
+
+    // Lock the seat and save gender
+    const seatRef = db.collection('seats').doc(`${booking.busID}-${booking.seatNo}`);
+    await seatRef.update({ 
+        status: 'locked', 
+        temp_chat_id: String(chatId), 
+        gender: gender 
+    });
+
+    booking.gender = gender;
+    
+    await saveAppState(chatId, 'AWAITING_PASSENGER_DETAILS', booking);
+    await sendMessage(chatId, MESSAGES.details_prompt, "HTML");
+}
+
+// 12. handleAddPassengerCallback
+async function handleAddPassengerCallback(chatId) {
+    // Note: Multi-seat booking requires handling selection of the next *available* seat, 
+    // which complicates the current single-seat flow. 
+    // For simplicity, this currently sends a WIP message and resets.
+    await saveAppState(chatId, 'IDLE', {});
+    await sendMessage(chatId, MESSAGES.feature_wip + " Multi-seat selection coming soon! Please complete your current booking.", "HTML");
+}
+
+// 13. createPaymentOrder
+async function createPaymentOrder(chatId, bookingData) {
+    try {
+        const db = getFirebaseDb();
+        const busInfo = await getBusInfo(bookingData.busID);
+        if (!busInfo) return await sendMessage(chatId, "❌ Bus not found for payment.");
+
+        const amount = busInfo.price * bookingData.passengers.length * 100; // Amount in paise
+
+        // 1. Create Razorpay Order
+        const order = await razorpay.orders.create({
+            amount: amount,
+            currency: "INR",
+            receipt: `rcpt_${chatId}_${Date.now()}`,
+            notes: {
+                chatId: String(chatId),
+                busID: bookingData.busID,
+            }
+        });
+
+        // 2. Save payment session data
+        const uniqueBookingId = `BOOK${Date.now().toString().slice(-6)}`;
+        const userDoc = await db.collection('users').doc(String(chatId)).get();
+        const userData = userDoc.data() || {};
+        
+        const finalBookingData = {
+            chat_id: String(chatId),
+            busID: bookingData.busID,
+            seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender })),
+            passengers: bookingData.passengers,
+            total_paid: amount,
+            razorpay_order_id: order.id,
+            status: 'pending_payment',
+            phone: userData.phone || 'N/A',
+            bookingId: uniqueBookingId
+        };
+        
+        await db.collection('payment_sessions').doc(order.id).set({ booking: finalBookingData });
+        
+        await saveAppState(chatId, 'AWAITING_PAYMENT', { 
+            razorpay_order_id: order.id, 
+            busID: bookingData.busID,
+            seats: finalBookingData.seats // Keep seats in app state for cleanup
+        });
+
+        const paymentUrl = `https://rzp.io/i/${order.id}`; // Simplified payment link
+
+        const response = MESSAGES.payment_required
+            .replace('{amount}', (amount / 100).toFixed(2))
+            .replace('{orderId}', order.id)
+            .replace('{paymentUrl}', paymentUrl);
+
+        await sendMessage(chatId, response, "HTML");
+
+    } catch (e) {
+        console.error("Razorpay Error:", e.message);
+        await unlockSeats(bookingData);
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, "❌ Failed to create payment order. Seats released. Please try again.");
+    }
+}
+
+// 14. handlePaymentVerification
+async function handlePaymentVerification(chatId, stateData) {
+    const orderId = stateData.razorpay_order_id;
+    const db = getFirebaseDb();
+
+    try {
+        const order = await razorpay.orders.fetch(orderId);
+        
+        if (order.status === 'paid') {
+            const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
+            if (!sessionDoc.exists) return await sendMessage(chatId, "❌ Critical: Payment session expired or missing.");
+
+            const bookingData = sessionDoc.data().booking;
+            await commitFinalBookingBatch(chatId, bookingData);
+        } else {
+            await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', orderId), "HTML");
+        }
+    } catch (e) {
+        console.error("Verification Error:", e.message);
+        await sendMessage(chatId, "❌ An error occurred while verifying payment status. Please try again later.");
+    }
+}
+
+// 15. handlePaymentCancelCallback
+async function handlePaymentCancelCallback(chatId) {
+    const state = await getAppState(chatId);
+    if (state.state !== 'AWAITING_PAYMENT') return await sendMessage(chatId, "❌ No active payment session to cancel.");
+
+    try {
+        await unlockSeats(state.data);
+        const db = getFirebaseDb();
+        if (state.data.razorpay_order_id) {
+            await db.collection('payment_sessions').doc(state.data.razorpay_order_id).delete();
+        }
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.session_cleared, "HTML");
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error + " Cancellation failed.");
+    }
+}
+
+// 16. commitFinalBookingBatch (CRITICAL: Used by Webhook and Manual Verification)
+async function commitFinalBookingBatch(chatId, bookingData) {
+    const db = getFirebaseDb();
+    const batch = db.batch();
+    const orderId = bookingData.razorpay_order_id;
+    const bookingId = bookingData.bookingId;
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const nowReadable = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
+    try {
+        // 1. Update Seats
+        bookingData.seats.forEach(seat => {
+            const seatRef = db.collection('seats').doc(`${bookingData.busID}-${seat.seatNo}`);
+            batch.update(seatRef, {
+                status: 'booked',
+                booking_id: bookingId,
+                temp_chat_id: admin.firestore.FieldValue.delete()
+            });
+        });
+
+        // 2. Create Final Booking Record
+        const bookingRef = db.collection('bookings').doc(bookingId);
+        batch.set(bookingRef, {
+            ...bookingData,
+            status: 'confirmed',
+            created_at: now
+        });
+        
+        // 3. Delete Payment Session
+        batch.delete(db.collection('payment_sessions').doc(orderId));
+        
+        // 4. Clear App State (Only if triggered by manual user verification, webhook handles outside of user state)
+        if (chatId) {
+            batch.delete(db.collection('user_state').doc(String(chatId)));
+        }
+
+        await batch.commit();
+
+        // 5. Send Notifications (Outside of batch)
+        const busInfo = await getBusInfo(bookingData.busID);
+        const seatsList = bookingData.seats.map(s => s.seatNo).join(', ');
+
+        const response = MESSAGES.payment_confirmed_ticket
+            .replace('{busName}', busInfo.busName || 'N/A')
+            .replace('{busType}', busInfo.busType || 'N/A')
+            .replace('{from}', busInfo.from)
+            .replace('{to}', busInfo.to)
+            .replace('{journeyDate}', busInfo.date)
+            .replace('{departTime}', busInfo.time)
+            .replace('{seatList}', seatsList)
+            .replace('{boardingPoints}', busInfo.boardingPoints.map(p => p.name).join(' / ') || 'N/A')
+            .replace('{name}', bookingData.passengers[0].name)
+            .replace('{phone}', bookingData.phone)
+            .replace('{orderId}', orderId)
+            .replace('{amount}', (bookingData.total_paid / 100).toFixed(2))
+            .replace('{dateTime}', nowReadable);
+
+        if (chatId) {
+             await sendMessage(chatId, response, "HTML");
+        }
+
+        await sendManagerNotification(bookingData.busID, 'BOOKING', {
+            seats: bookingData.seats,
+            passengerName: bookingData.passengers[0].name,
+            dateTime: nowReadable
+        });
+
+    } catch (e) {
+        console.error("CRITICAL: Failed to commit final booking batch for order:", orderId, e.message);
+        if (chatId) await sendMessage(chatId, MESSAGES.db_error + " (Booking failed, contact support with Order ID: " + orderId + ")");
+    }
+}
+
+// 17. handleBookingInfo
+async function handleBookingInfo(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('bookings')
+            .where('chat_id', '==', String(chatId))
+            .where('status', 'in', ['confirmed', 'boarded', 'pending_payment'])
+            .orderBy('created_at', 'desc')
+            .limit(10)
+            .get();
+
+        if (snapshot.empty) {
+            return await sendMessage(chatId, MESSAGES.no_bookings);
+        }
+
+        let bookingList = "🎫 <b>Your Recent Bookings:</b>\n\n";
+
+        snapshot.docs.forEach(doc => {
+            const booking = doc.data();
+            const date = booking.created_at ? booking.created_at.toDate().toLocaleDateString('en-IN') : 'N/A';
+            const seats = booking.seats.map(s => s.seatNo).join(', ');
+            
+            bookingList += `• <b>${doc.id}</b> (${booking.busID})\n`;
+            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
+            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
+        });
+
+        await sendMessage(chatId, bookingList + '💡 Use "Get ticket BOOKID" or "Check status BOOKID".', "HTML");
+
+    } catch (e) {
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
 /* --------------------- Message Router ---------------------- */
 
 async function handleUserMessage(chatId, text, user) {
@@ -1848,7 +2425,7 @@ async function handleUserMessage(chatId, text, user) {
         } else if (state.state.startsWith('MANAGER_TRACKING')) {
             await handleManagerInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_AADHAR_API_SETUP')) { 
-            await handleManagerInput(chatId, text, state);
+             await handleManagerInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_AWAITING_LIVE_ACTION')) { 
             const busID = state.data.busID;
              const keyboard = {
@@ -1859,7 +2436,7 @@ async function handleUserMessage(chatId, text, user) {
             };
             await sendMessage(chatId, MESSAGES.manager_tracking_session_active.replace('{busID}', busID) + "\n\nPlease use the buttons below to control the session.", "HTML", keyboard);
         } else if (state.state === 'AWAITING_NEW_PHONE') { 
-            await handlePhoneUpdateInput(chatId, text);
+             await handlePhoneUpdateInput(chatId, text);
         } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
             await handleInventorySyncInput(chatId, text, state);
         } else if (state.state === 'AWAITING_PAYMENT') {
@@ -2028,16 +2605,16 @@ app.post('/api/webhook', async (req, res) => {
                 await saveAppState(chatId, 'MANAGER_AADHAR_API_SETUP', {});
                 await sendMessage(chatId, MESSAGES.aadhar_api_init, "HTML");
             } else if (callbackData === 'cb_owner_manage_staff') {
-                 const userRole = await getUserRole(chatId);
-                 if (userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
-                 await sendMessage(chatId, MESSAGES.owner_manage_staff_prompt, "HTML");
+                const userRole = await getUserRole(chatId);
+                if (userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
+                await sendMessage(chatId, MESSAGES.owner_manage_staff_prompt, "HTML");
             } else if (callbackData === 'cb_show_my_trips') { 
                 await handleShowMyTrips(chatId);
             } else if (callbackData === 'cb_update_phone') { 
                 await handleUpdatePhoneNumberCallback(chatId);
             } else if (callbackData.startsWith('cb_select_gender_')) { 
-                // FIX: Added Missing handleGenderSelectionCallback function
-                await handleGenderSelectionCallback(chatId, callbackData);
+                 // FIX: Added Missing handleGenderSelectionCallback function
+                 await handleGenderSelectionCallback(chatId, callbackData);
             } else if (callbackData === 'cb_add_passenger') { 
                 await handleAddPassengerCallback(chatId);
             } else if (callbackData === 'cb_book_finish') { 
@@ -2109,11 +2686,13 @@ app.post('/api/razorpay/webhook', async (req, res) => {
             const bookingData = sessionDoc.data().booking;
             
             if (event === 'order.paid') {
-                await commitFinalBookingBatch(bookingData.chat_id, bookingData); 
+                // Pass null for chatId since this is a webhook, not a user interaction
+                await commitFinalBookingBatch(null, bookingData); 
             } else if (event === 'payment.failed') {
                 await unlockSeats(bookingData);
                 await db.collection('payment_sessions').doc(orderId).delete();
-                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
+                // We send the message back to the user's chat ID
+                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed); 
             }
         }
     }
