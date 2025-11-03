@@ -1557,7 +1557,29 @@ async function startUserRegistration(chatId, user) {
 }
 // -----------------------------------------------------
 
-// ... (Rest of the handlers remain the same)
+// --- FIX: ADDED Missing handleRoleSelection definition ---
+async function handleRoleSelection(chatId, user, callbackData) {
+    try {
+        const role = callbackData.split('_').pop();
+        const db = getFirebaseDb();
+        const newUser = {
+            user_id: 'USER' + Date.now(),
+            name: user.first_name + (user.last_name ? ' ' + user.last_name : ''),
+            chat_id: String(chatId),
+            phone: '', aadhar: '',
+            status: 'pending_details',
+            role: role, lang: 'en',
+            join_date: admin.firestore.FieldValue.serverTimestamp()
+        };
+        await db.collection('users').doc(String(chatId)).set(newUser);
+        await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "HTML");
+    } catch (error) {
+        console.error('❌ handleRoleSelection error:', error.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+// -----------------------------------------------------
+
 
 async function handleAddSeatsCommand(chatId, text) {
     const match = text.match(/add seats\s+(BUS\d+)\s+(\d+)/i);
