@@ -14,7 +14,7 @@ const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app/";
 
 // --- Predefined City List (Used for suggested buttons only) ---
-// Updated to include explicit major cities and prioritize them for buttons.
+// Note: This list is now only used for mock data/mock location updates.
 const MAJOR_CITIES = [
     'Mumbai', 'Kolhapur', 'Goa (Panaji)', 'Bengaluru', 'Hyderabad', 'Nagpur', 'Nashik',
     'Pune', 'Aurangabad', 'Margao', 'Hubballi'
@@ -114,9 +114,9 @@ Time: {dateTime}
     no_bookings: "📭 You don't have any active bookings.",
     booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.",
 
-    // NEW SEARCH MESSAGES
-    search_from: "🗺️ <b>Travel From:</b> Select a city below, or <b>type the full name of your city</b> to search:",
-    search_to: "➡️ <b>Travel To:</b> Select a city below, or <b>type the full name of your city</b> to search:",
+    // NEW SEARCH MESSAGES (MODIFIED)
+    search_from: "🗺️ <b>Travel From:</b> Please type the full name of your city to search:",
+    search_to: "➡️ <b>Travel To:</b> Please type the full name of your city to search:",
     search_city_invalid: "❌ City not found. Please ensure you type the full city name correctly (e.g., 'Pune'). Try again:",
     search_route_not_found: "❌ No routes available from <b>{city}</b>. Please check your spelling or try another city.",
     search_date: "📅 <b>Travel Date:</b> When do you plan to travel?",
@@ -774,17 +774,15 @@ async function sendHelpMessage(chatId) {
 /* --------------------- General Handlers ---------------------- */
 
 // --- Definition for starting the guided search flow (Required by handleBusSearch) ---
+// MODIFIED: Removes button suggestions and relies entirely on user text input
 async function handleStartSearch(chatId) {
     try {
-        // Use a subset of major cities for initial button suggestions
-        const suggestedCities = MAJOR_CITIES.slice(0, 6);
-
-        const keyboard = {
-            inline_keyboard: suggestedCities.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
-        };
-
+        // --- MODIFIED: REMOVED suggested cities buttons ---
+        // The user must now type the city name.
+        
+        // Clear keyboard in the prompt to encourage text input, passing null.
         await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 });
-        await sendMessage(chatId, MESSAGES.search_from, "HTML", keyboard);
+        await sendMessage(chatId, MESSAGES.search_from, "HTML", null); // Passing null for keyboard
 
     } catch (e) {
         console.error('Error starting search:', e.message);
@@ -1171,6 +1169,7 @@ async function showSearchResults(chatId, from, to, date) {
 
 
 // --- handleSearchInputCallback definition ---
+// MODIFIED: Removes city selection flow, only handles date buttons
 async function handleSearchInputCallback(chatId, callbackData, state) {
     const db = getFirebaseDb();
     let data = state.data;
@@ -1180,6 +1179,8 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
 
     // Handle initial Source selection (step 1)
     if (state.state === 'AWAITING_SEARCH_FROM') {
+        // This branch should ideally be unreachable since buttons are removed,
+        // but we keep the robust logic in case a cached button is clicked.
         data.from = callbackData.replace('cb_search_from_', '');
 
         const snapshot = await db.collection('buses').where('from', '==', data.from).get();
@@ -1187,22 +1188,20 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
 
         const dests = Array.from(availableDestinations).sort();
-        const suggestedDests = dests.slice(0, 6); // Suggest up to 6 destinations
-
-        keyboard = {
-            inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
-        };
 
         if (dests.length === 0) {
             await saveAppState(chatId, 'IDLE', {});
             return await sendMessage(chatId, `❌ No destinations currently scheduled from <b>${data.from}</b>.`, "HTML");
         }
-
+        
+        // Ensure no destination buttons are generated here
+        keyboard = null;
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
 
     // Handle Destination selection (step 2)
     } else if (state.state === 'AWAITING_SEARCH_TO') {
+        // This branch should also be unreachable via buttons in the new flow.
         data.to = callbackData.replace('cb_search_to_', '');
 
         keyboard = {
@@ -2185,6 +2184,7 @@ async function handleProfileUpdate(chatId, text) {
 }
 
 // 2. handleSearchTextInput
+// MODIFIED: Removes city button generation in the first two steps
 async function handleSearchTextInput(chatId, text, state) {
     const db = getFirebaseDb();
     let data = state.data;
@@ -2203,21 +2203,22 @@ async function handleSearchTextInput(chatId, text, state) {
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
 
         const dests = Array.from(availableDestinations).sort();
-        const suggestedDests = dests.slice(0, 6);
+        // Removed: suggestedDests generation (relying purely on user text input now)
 
         if (dests.length === 0) {
             return await sendMessage(chatId, MESSAGES.search_route_not_found.replace('{city}', city), "HTML");
         }
 
-        keyboard = {
-            inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
-        };
+        // Removed: keyboard generation for suggested destinations
+        keyboard = null; 
+
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
 
     } else if (state.state === 'AWAITING_SEARCH_TO') {
         data.to = city;
 
+        // Keep date selection buttons for convenience
         keyboard = {
             inline_keyboard: [
                 [{ text: "📅 Today", callback_data: `cb_search_date_today` }],
