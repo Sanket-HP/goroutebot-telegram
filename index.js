@@ -2,21 +2,21 @@
 const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
-const Razorpay = require('razorpay'); 
+const Razorpay = require('razorpay');
 const crypto = require('crypto');
 
 // --- Configuration ---
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN; 
-const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`; 
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`;
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
 // --- Mock Tracking URL (Conceptual Client Link) ---
-const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app/"; 
+const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app/";
 
 // --- Predefined City List (Used for suggested buttons only) ---
 // Updated to include explicit major cities and prioritize them for buttons.
 const MAJOR_CITIES = [
-    'Mumbai', 'Kolhapur', 'Goa (Panaji)', 'Bengaluru', 'Hyderabad', 'Nagpur', 'Nashik', 
+    'Mumbai', 'Kolhapur', 'Goa (Panaji)', 'Bengaluru', 'Hyderabad', 'Nagpur', 'Nashik',
     'Pune', 'Aurangabad', 'Margao', 'Hubballi'
 ];
 
@@ -44,17 +44,17 @@ Select an option from the menu below to get started. You can also type commands 
     no_seats_found: '❌ No seats found in the system for bus {busID}.',
     feature_wip: '🚧 This feature is coming soon!',
     welcome_back: '👋 Welcome back, {name}!',
-    
+
     // --- NEW LAYOUT DESCRIPTIONS ---
     bus_layout_seater: "Seater Bus (2x2)",
     bus_layout_sleeper: "Sleeper Coach (Upper & Lower Berth, 2x1)",
     bus_layout_both: "Semi Sleeper (2x1) & Seater (2x2) Mix",
-    
+
     // Registration
     prompt_role: "🎉 <b>Welcome to GoRoute!</b> To get started, please choose your role:",
-    registration_started: "✅ Great! Your role is set to <b>{role}</b>.\n\nTo complete your profile, please provide your details in this format:\n\n<pre>my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]</pre>", 
+    registration_started: "✅ Great! Your role is set to <b>{role}</b>.\n\nTo complete your profile, please provide your details in this format:\n\n<pre>my profile details [Your Full Name] / [Your Aadhar Number] / [Your Phone Number]</pre>",
     profile_updated: "✅ <b>Profile Updated!</b> Your details have been saved.",
-    profile_update_error: "❌ <b>Error!</b> Please use the correct format:\n<pre>my profile details [Name] / [Aadhar Number] / [Phone Number]</pre>", 
+    profile_update_error: "❌ <b>Error!</b> Please use the correct format:\n<pre>my profile details [Name] / [Aadhar Number] / [Phone Number]</pre>",
     user_not_found: "❌ User not found. Please send /start to register.",
 
     // Phone Update
@@ -70,7 +70,7 @@ Select an option from the menu below to get started. You can also type commands 
     safety_violation: "🚫 <b>Seat Safety Violation:</b> A male cannot book seat {seatNo} as it is next to a female-occupied seat. Please choose another seat.",
     details_prompt: "✍️ <b>Passenger Details:</b> Please enter the passenger's Name, Age, and Aadhar number in this format:\n<pre>[Name] / [Age] / [Aadhar Number]</pre>",
     booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n<b>What's next?</b>",
-    
+
     // Payment
     payment_required: "💰 <b>Payment Required:</b> Total Amount: ₹{amount} INR.\n\n<b>Order ID: {orderId}</b>\n\n<a href='{paymentUrl}'>Click here to pay</a>\n\n<i>(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)</i>",
     payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).\n\nSelect an option below once payment is complete or if you wish to cancel.",
@@ -79,7 +79,7 @@ Select an option from the menu below to get started. You can also type commands 
 
     // Detailed Ticket Confirmation (UPDATED FOR BOARDING POINT)
     payment_confirmed_ticket: `✅ <b>Payment Confirmed & E-Ticket Issued!</b>
-    
+
 🎫 <b>E-Ticket Details</b>
 Bus: {busName} ({busType})
 Route: {from} → {to}
@@ -106,13 +106,14 @@ Time: {dateTime}
     user_share_location_wip: "👨‍👩‍👧‍👦 <b>Personal Location Sharing:</b> This feature requires deep integration with your device's GPS and is under development. Please check back later!",
     fare_alert_invalid: "❌ Invalid format. Use: <pre>Alert on [FROM] to [TO] @ [HH:MM]</pre>",
     fare_alert_set: "🔔 <b>Fare Alert Set!</b> We will notify you if tickets for {from} to {to} around {time} become available or change significantly.",
+    fare_alert_notify: "🔔 <b>FARE ALERT!</b>\n\nA bus matching your route is now available!\n\n🚌 <b>{busName}</b> ({busID})\nRoute: {from} → {to}\nTime: {time}\nPrice: <b>₹{price}</b> INR\n\nGo to the bot and use \"Show seats {busID}\" to book!",
 
 
     booking_details_error: "❌ <b>Error!</b> Please provide details in the format: <pre>[Name] / [Age] / [Aadhar Number]</pre>",
     seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
     no_bookings: "📭 You don't have any active bookings.",
-    booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.", 
-    
+    booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.",
+
     // NEW SEARCH MESSAGES
     search_from: "🗺️ <b>Travel From:</b> Select a city below, or <b>type the full name of your city</b> to search:",
     search_to: "➡️ <b>Travel To:</b> Select a city below, or <b>type the full name of your city</b> to search:",
@@ -120,12 +121,12 @@ Time: {dateTime}
     search_route_not_found: "❌ No routes available from <b>{city}</b>. Please check your spelling or try another city.",
     search_date: "📅 <b>Travel Date:</b> When do you plan to travel?",
     search_results: "🚌 <b>Search Results ({from} to {to}, {date})</b> 🚌\n\n",
-    
+
     // NEW MANIFEST MESSAGE
     manifest_header: "📋 <b>Bus Manifest - {busID}</b>\nRoute: {from} → {to}\nDate: {date}\nTotal Booked Seats: {count}\n\n",
     manifest_entry: " • <b>Seat {seat}:</b> {name} (Aadhar {aadhar}) {gender}",
     no_manifest: "❌ No confirmed bookings found for bus {busID}.",
-    
+
     // New Seat Map Header (UPDATED)
     seat_map_header: "🚍 <b>Seat Map - {busID}</b> ({layout})\nRoute: {from} → {to}\nDate: {date} 🕒 {time}\n\nLegend: ✅ Available • ⚫ Booked/Locked • 🚺 Female • 🚹 Male • 💺 Seater • 🛏️ Sleeper",
     seat_map_group_header: "\n--- {type} Seats ---\n",
@@ -150,7 +151,7 @@ Time: {dateTime}
     owner_staff_revoked: "✅ Chat ID <b>{chatId}</b> role revoked (set to user).",
     owner_invalid_format: "❌ Invalid format. Use: <pre>assign manager CHAT_ID</pre> or <pre>revoke manager CHAT_ID</pre>",
     owner_permission_denied: "❌ Only Bus Owners can manage staff roles.",
-    
+
     // Revenue & Audit
     revenue_report: "💵 <b>Revenue Report for {date}</b>\n\nTotal Confirmed Bookings: {count}\nTotal Revenue (Gross): <b>₹{totalRevenue} INR</b>",
     bus_status_invalid: "❌ Invalid status. Status must be one of: <pre>scheduled</pre>, <pre>departed</pre>, <pre>arrived</pre>, or <pre>maintenance</pre>.",
@@ -160,7 +161,7 @@ Time: {dateTime}
     seat_release_invalid: "❌ Invalid format. Use: <pre>Release seat BUSID SEAT_NO</pre>",
     seat_release_success: "✅ Seat <b>{seatNo}</b> on Bus <b>{busID}</b> released and set to 'Available'.",
     aadhar_api_config_show: "🔒 <b>Aadhar Verification API Configuration</b>\n\nEndpoint URL: <code>{url}</code>\nStatus: {status}\n\nTo update, click '🔒 Setup Aadhar API' in the menu.",
-    
+
     // Aadhar API Setup
     aadhar_api_init: "🔒 <b>Aadhar Verification Setup:</b> Enter the verification API endpoint URL:",
     aadhar_api_success: "✅ Aadhar API Endpoint set to: {url}",
@@ -203,7 +204,7 @@ const app = express();
 app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // --- Database Initialization ---
-let db; 
+let db;
 
 function getFirebaseDb() {
     if (db) return db;
@@ -214,7 +215,7 @@ function getFirebaseDb() {
             // CRITICAL: Fail fast if the variable is missing
             throw new Error("CRITICAL: FIREBASE_CREDS_BASE64 is not defined in Vercel Environment Variables.");
         }
-        
+
         let jsonString;
         try {
             // FIX: Added logging and explicit check for Buffer conversion failure
@@ -240,7 +241,7 @@ function getFirebaseDb() {
                 throw error;
             }
         }
-        
+
         db = admin.firestore();
         console.log("✅ Firebase DB initialized successfully.");
         return db;
@@ -248,7 +249,7 @@ function getFirebaseDb() {
     } catch (e) {
         console.error("CRITICAL FIREBASE ERROR", e.message);
         // Rethrow the error so the calling function can handle it gracefully.
-        throw e; 
+        throw e;
     }
 }
 
@@ -258,7 +259,7 @@ function getFirebaseDb() {
 async function sendMessage(chatId, text, parseMode = 'HTML', replyMarkup = null) {
     if (!TELEGRAM_TOKEN) {
         console.error("❌ CRITICAL: TELEGRAM_TOKEN environment variable is missing. Cannot send message.");
-        return; 
+        return;
     }
 
     // --- DEFENSIVE MESSAGE GUARD: Prevent "message text is empty" error ---
@@ -272,7 +273,7 @@ async function sendMessage(chatId, text, parseMode = 'HTML', replyMarkup = null)
     try {
         const payload = { chat_id: String(chatId), text: text, parse_mode: parseMode };
         if (replyMarkup) payload.reply_markup = replyMarkup;
-        
+
         const response = await axios.post(`${TELEGRAM_API}sendMessage`, payload);
         // Console log only on success to make failed attempts clearer in logs
         console.log(`[TELEGRAM] Message sent successfully to ${chatId}.`);
@@ -366,7 +367,7 @@ async function getBusInfo(busID) {
         const db = getFirebaseDb();
         const doc = await db.collection('buses').doc(busID).get();
         if (!doc.exists) return null;
-        
+
         const data = doc.data();
         return {
             busID: data.bus_id,
@@ -389,9 +390,9 @@ async function getBusInfo(busID) {
 async function sendManagerNotification(busID, type, details) {
     try {
         const db = getFirebaseDb();
-        const busDoc = await db.collection('buses').doc(busID).get(); 
-        
-        if (!busDoc.exists || !busDoc.data().manager_chat_id) return; 
+        const busDoc = await db.collection('buses').doc(busID).get();
+
+        if (!busDoc.exists || !busDoc.data().manager_chat_id) return;
 
         const managerChatId = busDoc.data().manager_chat_id;
         const now = details.dateTime || new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -424,13 +425,13 @@ async function sendManagerNotification(busID, type, details) {
 /**
  * Sends a notification to all confirmed passengers on a specific bus route
  * notifying them that tracking has started.
- * @param {string} busID 
- * @param {string} location 
- * @param {string} time 
+ * @param {string} busID
+ * @param {string} location
+ * @param {string} time
  */
 async function notifyPassengersOfTrackingStart(busID, location, time) {
     const db = getFirebaseDb();
-    
+
     try {
         // 1. Find all confirmed bookings for this bus
         const bookingsSnapshot = await db.collection('bookings')
@@ -470,7 +471,7 @@ async function notifyPassengersOfTrackingStart(busID, location, time) {
 
 /**
  * Converts a string like "3 hours" or "45 minutes" to milliseconds.
- * @param {string} durationString 
+ * @param {string} durationString
  * @returns {number} Milliseconds
  */
 function parseDurationToMs(durationString) {
@@ -478,7 +479,7 @@ function parseDurationToMs(durationString) {
     if (typeof durationString !== 'string' || durationString.trim() === '') {
         return 0;
     }
-    
+
     const parts = durationString.toLowerCase().trim().split(' ');
     if (parts.length !== 2) return 0;
 
@@ -497,12 +498,12 @@ function parseDurationToMs(durationString) {
 
 /**
  * --- MID-ROUTE RELEASE LOGIC ---
- * Iterates through active seats and checks if a passenger's booked-to-destination 
+ * Iterates through active seats and checks if a passenger's booked-to-destination
  * matches the bus's last reported location (or a mock stop point).
  */
 async function checkAndReleaseMidRouteSeats() {
     const db = getFirebaseDb();
-    
+
     // 1. Find all actively tracked buses (these are moving)
     const trackedBusesSnapshot = await db.collection('buses').where('is_tracking', '==', true).get();
 
@@ -521,17 +522,17 @@ async function checkAndReleaseMidRouteSeats() {
 
         const batch = db.batch();
         let seatsReleasedCount = 0;
-        
+
         // 3. Check each booked seat against the current location
         seatsSnapshot.forEach(seatDoc => {
             const seatData = seatDoc.data();
             // Check if the seat has a booked_to_destination and if it matches the current bus location
-            const destination = seatData.booked_to_destination; 
+            const destination = seatData.booked_to_destination;
 
             // Simple check: If the passenger's destination matches the bus's current mock location (case insensitive, partial match)
-            if (destination && destination.toLowerCase().includes(currentLocation.toLowerCase())) {
+            if (destination && currentLocation && destination.toLowerCase().includes(currentLocation.toLowerCase())) {
                 console.log(`[MID-ROUTE RELEASE] Releasing seat ${seatData.seat_no} on ${busID}. Destination matched: ${destination} vs ${currentLocation}`);
-                
+
                 // Release the seat immediately, but keep the gender (crucial for safety checks for the next person)
                 batch.update(seatDoc.ref, {
                     status: 'available',
@@ -541,10 +542,10 @@ async function checkAndReleaseMidRouteSeats() {
                 seatsReleasedCount++;
             }
         });
-        
+
         if (seatsReleasedCount > 0) {
-              await batch.commit();
-              console.log(`[MID-ROUTE SUCCESS] Released ${seatsReleasedCount} seats on Bus ${busID}.`);
+             await batch.commit();
+             console.log(`[MID-ROUTE SUCCESS] Released ${seatsReleasedCount} seats on Bus ${busID}.`);
         }
     }
 }
@@ -559,37 +560,37 @@ async function sendLiveLocationUpdates() {
     const currentTime = new Date();
     const notificationTime = currentTime.toLocaleTimeString('en-IN');
     // NOTE: This list now serves as mock locations AND mock destination names for mid-route release
-    const mockLocation = ['Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur']; 
+    const mockLocation = ['Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur'];
 
     try {
-        
+
         // 1. Run Mid-Route Seat Release Check
         await checkAndReleaseMidRouteSeats();
-        
+
         // 2. Continue with Regular Location Update/Stop Check
         const busesSnapshot = await db.collection('buses').where('is_tracking', '==', true).get();
-        
+
         for (const busDoc of busesSnapshot.docs) {
             const data = busDoc.data();
             const busID = data.bus_id;
             const managerId = data.manager_chat_id;
-            
+
             // 2a. Check for Automatic Stop
             if (data.tracking_stop_time) {
                 const stopTime = data.tracking_stop_time.toDate();
                 if (currentTime > stopTime) {
                     // Time elapsed: Stop tracking and notify manager
-                    const startTime = busDoc.data().last_location_time.toDate();
+                    const startTime = busDoc.data().last_location_time ? busDoc.data().last_location_time.toDate() : new Date(); // Defensive check
                     const durationMs = stopTime.getTime() - startTime.getTime();
                     const durationString = `${Math.floor(durationMs / 3600000)}h ${Math.floor((durationMs % 3600000) / 60000)}m`;
 
                     await busDoc.ref.update({ is_tracking: false, status: 'arrived', tracking_stop_time: admin.firestore.FieldValue.delete() });
-                    
+
                     const autoStopMsg = MESSAGES.tracking_auto_stopped
                         .replace('{busID}', busID)
                         .replace('{time}', notificationTime)
                         .replace('{duration}', durationString);
-                    
+
                     if (managerId) updates.push(sendMessage(managerId, autoStopMsg, "HTML"));
                     continue; // Skip the regular update for this bus
                 }
@@ -605,7 +606,6 @@ async function sendLiveLocationUpdates() {
             });
 
             if (managerId) {
-                // Manager notification is handled here, but passenger notification is handled in checkAndReleaseMidRouteSeats
                 updatesSent++;
             }
         }
@@ -619,6 +619,79 @@ async function sendLiveLocationUpdates() {
     }
 }
 
+
+/* --------------------- Fare Alert Cron Logic (NEW) ---------------------- */
+
+/**
+ * Checks for new buses/routes and notifies users who have set fare alerts.
+ */
+async function sendFareAlertNotifications() {
+    const db = getFirebaseDb();
+    const notificationPromises = [];
+
+    try {
+        // 1. Get all active alerts
+        const alertsSnapshot = await db.collection('fare_alerts').get();
+        if (alertsSnapshot.empty) return { alertsChecked: 0 };
+
+        // 2. Get all scheduled/active buses
+        const busesSnapshot = await db.collection('buses').where('status', 'in', ['scheduled', 'departed']).get();
+
+        if (busesSnapshot.empty) return { alertsChecked: alertsSnapshot.size };
+
+        const alertsToDelete = [];
+
+        alertsSnapshot.forEach(alertDoc => {
+            const alert = alertDoc.data();
+            const alertId = alertDoc.id;
+
+            busesSnapshot.forEach(busDoc => {
+                const bus = busDoc.data();
+
+                // Simple Match Logic: Match From, To (case-insensitive) and Time (simple HH:MM check)
+                const busTime = bus.departure_time.split(' ')[1]; // HH:MM
+                const matchRoute = bus.from.toLowerCase() === alert.from.toLowerCase() && bus.to.toLowerCase() === alert.to.toLowerCase();
+                const matchTime = busTime === alert.time; // Exact time match for simplicity
+
+                // If match found
+                if (matchRoute && matchTime) {
+
+                    const notificationText = MESSAGES.fare_alert_notify
+                        .replace('{busName}', bus.bus_name)
+                        .replace('{busID}', bus.bus_id)
+                        .replace('{from}', bus.from)
+                        .replace('{to}', bus.to)
+                        .replace('{time}', busTime)
+                        .replace('{price}', (bus.price || 0).toFixed(2));
+
+                    // Add notification promise
+                    notificationPromises.push(sendMessage(alert.chat_id, notificationText, "HTML"));
+
+                    // Mark alert for deletion
+                    if (!alertsToDelete.includes(alertId)) {
+                        alertsToDelete.push(alertId);
+                    }
+                }
+            });
+        });
+
+        // 3. Delete matched alerts using a batch
+        const batch = db.batch();
+        alertsToDelete.forEach(alertId => {
+            batch.delete(db.collection('fare_alerts').doc(alertId));
+        });
+        notificationPromises.push(batch.commit());
+
+
+        await Promise.all(notificationPromises);
+        return { alertsChecked: alertsSnapshot.size, alertsSent: alertsToDelete.length };
+
+    } catch (e) {
+        console.error("CRON JOB FAILED during fare alert check:", e.message);
+        throw e;
+    }
+}
+
 /* --------------------- Razorpay Webhook Verification ---------------------- */
 
 function verifyRazorpaySignature(payload, signature) {
@@ -629,7 +702,7 @@ function verifyRazorpaySignature(payload, signature) {
     const expectedSignature = crypto.createHmac('sha256', RAZORPAY_WEBHOOK_SECRET)
         .update(payload)
         .digest('hex');
-    
+
     return expectedSignature === signature;
 }
 
@@ -643,7 +716,7 @@ async function getUserRole(chatId) {
         return 'unregistered';
     } catch (e) {
         console.error('Error fetching user role, assuming error:', e.message);
-        return 'error'; 
+        return 'error';
     }
 }
 
@@ -652,7 +725,7 @@ async function sendHelpMessage(chatId) {
         const db = getFirebaseDb();
         const userDoc = await db.collection('users').doc(String(chatId)).get();
         const userRole = userDoc.exists ? userDoc.data().role : 'unregistered';
-        
+
         let baseButtons = [];
 
         if (userRole === 'owner') {
@@ -664,7 +737,7 @@ async function sendHelpMessage(chatId) {
                 [{ text: "🔔 View Fare Alerts", callback_data: "cb_show_fare_alerts" }] // ADDED: New Audit Feature
             );
         }
-        
+
         if (userRole === 'manager' || userRole === 'owner') {
             baseButtons.push(
                 [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
@@ -672,10 +745,10 @@ async function sendHelpMessage(chatId) {
                 [{ text: "📍 Start Route Tracking", callback_data: "cb_start_route_tracking_prompt" }],
                 [{ text: "📋 Show Manifest", callback_data: "cb_show_manifest_prompt" }],
                 [{ text: "🔗 Setup Inventory Sync", callback_data: "cb_inventory_sync" }],
-                [{ text: "Check-In/Release", callback_data: "cb_checkin_release_prompt"}] 
+                [{ text: "Check-In/Release", callback_data: "cb_checkin_release_prompt"}]
             );
         }
-        
+
         if (userRole === 'user' || userRole === 'unregistered') {
              baseButtons.push(
                 [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
@@ -685,7 +758,7 @@ async function sendHelpMessage(chatId) {
         }
 
         let finalButtons = baseButtons;
-        
+
         finalButtons.push([{ text: "📞 Update Phone", callback_data: "cb_update_phone" }, { text: "👤 My Profile", callback_data: "cb_my_profile" }]);
         finalButtons.push([{ text: "ℹ️ Help / Status", callback_data: "cb_status" }]);
 
@@ -704,13 +777,13 @@ async function sendHelpMessage(chatId) {
 async function handleStartSearch(chatId) {
     try {
         // Use a subset of major cities for initial button suggestions
-        const suggestedCities = MAJOR_CITIES.slice(0, 6); 
-        
+        const suggestedCities = MAJOR_CITIES.slice(0, 6);
+
         const keyboard = {
             inline_keyboard: suggestedCities.map(loc => [{ text: loc, callback_data: `cb_search_from_${loc}` }])
         };
 
-        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 }); 
+        await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 });
         await sendMessage(chatId, MESSAGES.search_from, "HTML", keyboard);
 
     } catch (e) {
@@ -747,7 +820,7 @@ async function handleShowRevenue(chatId, text) {
         snapshot.forEach(doc => {
             const data = doc.data();
             const bookingDate = data.created_at ? data.created_at.toDate().toISOString().split('T')[0] : null;
-            
+
             if (bookingDate === targetDate) {
                 totalRevenue += data.total_paid || 0;
                 confirmedCount++;
@@ -758,7 +831,7 @@ async function handleShowRevenue(chatId, text) {
             .replace('{date}', targetDate)
             .replace('{count}', confirmedCount)
             .replace('{totalRevenue}', (totalRevenue / 100).toFixed(2));
-            
+
         await sendMessage(chatId, response, "HTML");
         return; // Explicit return
 
@@ -774,7 +847,7 @@ async function handleSetBusStatus(chatId, text) {
     if (userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
 
     const match = text.match(/set status\s+(BUS\d+)\s+(scheduled|departed|arrived|maintenance)/i);
-    
+
     if (!match) return await sendMessage(chatId, MESSAGES.bus_status_invalid + "\nExample: <pre>Set status BUS101 maintenance</pre>", "HTML");
 
     const busID = match[1].toUpperCase();
@@ -823,7 +896,7 @@ async function handleCheckIn(chatId, text) {
             return await sendMessage(chatId, `❌ Booking <b>${bookingId}</b> not found or not confirmed.`);
         }
 
-        await bookingRef.update({ 
+        await bookingRef.update({
             status: 'boarded',
             check_in_time: admin.firestore.FieldValue.serverTimestamp()
         });
@@ -882,14 +955,14 @@ async function handleShowAadharApiConfig(chatId) {
     try {
         const db = getFirebaseDb();
         const doc = await db.collection('settings').doc('aadhar_verification').get();
-        
+
         const url = doc.exists ? doc.data().endpoint_url : 'N/A';
         const status = doc.exists && url !== 'N/A' ? '✅ Active' : '🔴 Not Configured';
 
         const response = MESSAGES.aadhar_api_config_show
             .replace('{url}', url)
             .replace('{status}', status);
-        
+
         await sendMessage(chatId, response, "HTML");
         return; // Explicit return
 
@@ -935,22 +1008,22 @@ async function handleShowFareAlerts(chatId) {
     try {
         const db = getFirebaseDb();
         // Limit to 20 for performance in a large table
-        const snapshot = await db.collection('fare_alerts').orderBy('created_at', 'asc').limit(20).get(); 
+        const snapshot = await db.collection('fare_alerts').orderBy('created_at', 'asc').limit(20).get();
 
         if (snapshot.empty) {
             return await sendMessage(chatId, "📭 No active fare alerts have been set by any users.");
         }
-        
+
         let alertList = "🔔 <b>Active Fare Alerts (Last 20)</b>\n\n";
 
         snapshot.docs.forEach((doc, index) => {
             const alert = doc.data();
             const date = alert.created_at ? alert.created_at.toDate().toLocaleString('en-IN') : 'N/A';
             alertList += `${index + 1}. <b>${alert.from}</b> → <b>${alert.to}</b> @ ${alert.time}\n`;
-            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
-            alertList += `  Set On: ${date}\n\n`;
+            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
+            alertList += `  Set On: ${date}\n\n`;
         });
-        
+
         alertList += "💡 To delete an alert, notify the user or manage the record in the database.";
 
         await sendMessage(chatId, alertList, "HTML");
@@ -972,7 +1045,7 @@ async function handleUserProfile(chatId) {
         if (doc.exists) {
             const user = doc.data();
             const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
-            
+
             const profileText = `👤 <b>Your Profile</b>\n\n` +
                                      `<b>Name:</b> ${user.name || 'Not set'}\n` +
                                      `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
@@ -981,7 +1054,7 @@ async function handleUserProfile(chatId) {
                                      `<b>Role:</b> ${user.role || 'user'}\n` +
                                      `<b>Status:</b> ${user.status || 'N/A'}\n` +
                                      `<b>Member since:</b> ${joinDate}`;
-            
+
             await sendMessage(chatId, profileText, "HTML");
             return; // Explicit return
         } else {
@@ -1001,7 +1074,7 @@ async function handleUpdatePhoneNumberCallback(chatId) {
     if (userRole === 'unregistered' || userRole === 'error') {
         return await sendMessage(chatId, "❌ You must register first to update your profile. Send /start.");
     }
-    
+
     try {
         await saveAppState(chatId, 'AWAITING_NEW_PHONE', {});
         await sendMessage(chatId, MESSAGES.update_phone_prompt, "HTML");
@@ -1029,7 +1102,7 @@ async function handleShowMyTrips(chatId) {
         if (snapshot.empty) {
             return await sendMessage(chatId, MESSAGES.no_active_trips);
         }
-        
+
         const buses = snapshot.docs.map(doc => doc.data());
         buses.sort((a, b) => (a.departure_time > b.departure_time) ? 1 : -1);
 
@@ -1037,7 +1110,7 @@ async function handleShowMyTrips(chatId) {
         buses.forEach(data => {
             const date = data.departure_time.split(' ')[0];
             tripList += `\n• <b>${data.bus_id}</b>: ${data.from} → ${data.to}\n`;
-            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
+            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
         });
 
         const response = MESSAGES.manager_list_trips.replace('{tripList}', tripList);
@@ -1053,11 +1126,11 @@ async function handleShowMyTrips(chatId) {
 async function showSearchResults(chatId, from, to, date) {
     try {
         const db = getFirebaseDb();
-        
+
         const snapshot = await db.collection('buses')
             .where('from', '==', from)
             .where('to', '==', to)
-            .get(); 
+            .get();
 
         const buses = [];
         snapshot.forEach(doc => {
@@ -1067,7 +1140,7 @@ async function showSearchResults(chatId, from, to, date) {
                     busID: data.bus_id, from: data.from, to: data.to,
                     date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
                     owner: data.bus_name, price: data.price, busType: data.bus_type,
-                    rating: data.rating || 4.2, total_seats: data.total_seats || 40 
+                    rating: data.rating || 4.2, total_seats: data.total_seats || 40
                 });
             }
         });
@@ -1075,7 +1148,7 @@ async function showSearchResults(chatId, from, to, date) {
         if (buses.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "HTML");
 
         let response = MESSAGES.search_results.replace('{from}', from).replace('{to}', to).replace('{date}', date);
-        
+
         for (const bus of buses) {
             // Check available seats dynamically
             const seatsSnapshot = await db.collection('seats').where('bus_id', '==', bus.busID).where('status', '==', 'available').get();
@@ -1089,7 +1162,7 @@ async function showSearchResults(chatId, from, to, date) {
         }
         await sendMessage(chatId, response, "HTML");
         return; // Explicit return
-        
+
     } catch (error) {
         await sendMessage(chatId, MESSAGES.db_error);
     }
@@ -1108,7 +1181,7 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
     // Handle initial Source selection (step 1)
     if (state.state === 'AWAITING_SEARCH_FROM') {
         data.from = callbackData.replace('cb_search_from_', '');
-        
+
         const snapshot = await db.collection('buses').where('from', '==', data.from).get();
         const availableDestinations = new Set();
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
@@ -1124,10 +1197,10 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
             await saveAppState(chatId, 'IDLE', {});
             return await sendMessage(chatId, `❌ No destinations currently scheduled from <b>${data.from}</b>.`, "HTML");
         }
-        
+
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
-        
+
     // Handle Destination selection (step 2)
     } else if (state.state === 'AWAITING_SEARCH_TO') {
         data.to = callbackData.replace('cb_search_to_', '');
@@ -1157,10 +1230,10 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
             await saveAppState(chatId, 'IDLE', {});
             return await sendMessage(chatId, MESSAGES.feature_wip + " Please restart search and select Today or Tomorrow.");
         }
-        
+
         data.date = targetDate;
-        await saveAppState(chatId, 'IDLE', {}); 
-        
+        await saveAppState(chatId, 'IDLE', {});
+
         return await showSearchResults(chatId, data.from, data.to, data.date);
     }
 
@@ -1177,7 +1250,7 @@ async function handleSeatMap(chatId, text) {
     try {
         const busMatch = text.match(/(BUS\d+)/i);
         const busID = busMatch ? busMatch[1].toUpperCase() : null;
-        
+
         if (!busID) return await sendMessage(chatId, MESSAGES.specify_bus_id, "HTML");
 
         const busInfo = await getBusInfo(busID);
@@ -1185,12 +1258,12 @@ async function handleSeatMap(chatId, text) {
 
         const db = getFirebaseDb();
         const seatsSnapshot = await db.collection('seats').where('bus_id', '==', busID).get();
-        
+
         if (seatsSnapshot.empty) return await sendMessage(chatId, MESSAGES.no_seats_found.replace('{busID}', busID));
 
         const seatData = {};
         const availableSeatsList = [];
-        
+
         let descriptiveLayout = '';
         if (busInfo.busType === 'seater') descriptiveLayout = MESSAGES.bus_layout_seater;
         else if (busInfo.busType === 'sleeper') descriptiveLayout = MESSAGES.bus_layout_sleeper;
@@ -1203,7 +1276,7 @@ async function handleSeatMap(chatId, text) {
             if (!seatData[data.type]) seatData[data.type] = [];
             seatData[data.type].push(data);
         });
-        
+
         // --- DYNAMIC SEAT MAP UI GENERATION (List-based) ---
         let seatMap = MESSAGES.seat_map_header
             .replace('{busID}', busID)
@@ -1212,16 +1285,16 @@ async function handleSeatMap(chatId, text) {
             .replace('{to}', busInfo.to)
             .replace('{date}', busInfo.date)
             .replace('{time}', busInfo.time);
-        
+
         let availableCount = 0;
-        
+
         for (const type in seatData) {
             seatMap += MESSAGES.seat_map_group_header.replace('{type}', type.toUpperCase());
             seatData[type].sort((a, b) => a.seat_no.localeCompare(b.seat_no)); // Sort seats by number
 
             seatData[type].forEach(seat => {
                 const typeIcon = SEAT_ICONS[type.toLowerCase()] || '🪑'; // Use mapped icon
-                
+
                 let statusIcon = '';
                 let destination = '';
 
@@ -1246,7 +1319,7 @@ async function handleSeatMap(chatId, text) {
                     .replace('{destination}', destination) + '\n';
             });
         }
-        
+
         seatMap += `\n📊 <b>${availableCount}</b> seats available / ${seatsSnapshot.size || 0} total\n`;
         seatMap += availableSeatsList.length > 0 ? "\n👇 <b>Tap a seat below to book it:</b>" : "";
 
@@ -1257,16 +1330,16 @@ async function handleSeatMap(chatId, text) {
             const row = availableSeatsList.slice(i, i + rowSize).map(seat => ({
                 text: seat.display,
                 // New callback format: cb_book_seat_BUSID_SEATNO
-                callback_data: `cb_book_seat_${busID}_${seat.seatNo}` 
+                callback_data: `cb_book_seat_${busID}_${seat.seatNo}`
             }));
             buttons.push(row);
         }
-        
+
         const keyboard = { inline_keyboard: buttons };
 
         await sendMessage(chatId, seatMap, "HTML", buttons.length > 0 ? keyboard : null);
         return;
-        
+
     } catch (error) {
         console.error("Error in handleSeatMap:", error.message);
         await sendMessage(chatId, MESSAGES.db_error);
@@ -1282,7 +1355,7 @@ async function handleSeatSelection(chatId, text) {
 
         const busID = match[1].toUpperCase();
         const seatNo = match[2].toUpperCase();
-        
+
         // Use the common callback handler logic
         await handleBookSeatCallback(chatId, `cb_book_seat_${busID}_${seatNo}`);
         return;
@@ -1297,19 +1370,19 @@ async function handleSeatSelection(chatId, text) {
 // --- NEW DEFINITION: handleBookSeatCallback (for interactive booking) ---
 async function handleBookSeatCallback(chatId, callbackData) {
     // Expected format: cb_book_seat_BUSID_SEATNO
-    const parts = callbackData.split('_'); 
+    const parts = callbackData.split('_');
     if (parts.length < 5) return await sendMessage(chatId, "❌ Invalid seat selection data. Please retry from the seat map or type the full command.");
-    
+
     const busID = parts[3];
     const seatNo = parts[4];
-    
+
     const db = getFirebaseDb();
     const seatRef = db.collection('seats').doc(`${busID}-${seatNo}`);
     const seatDoc = await seatRef.get();
 
     if (!seatDoc.exists || seatDoc.data().status !== 'available') {
-         await saveAppState(chatId, 'IDLE', {});
-         return await sendMessage(chatId, MESSAGES.seat_not_available.replace('{seatNo}', seatNo).replace('{busID}', busID), "HTML");
+           await saveAppState(chatId, 'IDLE', {});
+           return await sendMessage(chatId, MESSAGES.seat_not_available.replace('{seatNo}', seatNo).replace('{busID}', busID), "HTML");
     }
 
     const busInfo = await getBusInfo(busID);
@@ -1323,9 +1396,9 @@ async function handleBookSeatCallback(chatId, callbackData) {
         boardingPoint: null, // NEW FIELD INITIALIZED
         passengers: [],
     };
-    
+
     await saveAppState(chatId, 'AWAITING_BOARDING_POINT', bookingData); // NEW STATE
-    
+
     // Prompt for BOARDING point
     await sendMessage(chatId, MESSAGES.prompt_boarding, "HTML"); // NEW MESSAGE
 }
@@ -1366,7 +1439,7 @@ async function handleDestinationSelectionInput(chatId, text, state) {
     }
 
     booking.destination = destination;
-    
+
     // Proceed to Gender Selection step
     await saveAppState(chatId, 'AWAITING_GENDER_SELECTION', booking);
 
@@ -1396,20 +1469,20 @@ async function handleShowLiveLocation(chatId, text) {
         }
 
         const busData = busDoc.data();
-        const lastUpdateTime = busData.last_location_time ? 
+        const lastUpdateTime = busData.last_location_time ?
             busData.last_location_time.toDate().toLocaleTimeString('en-IN') : 'N/A';
-            
-        const trackingUrl = MOCK_TRACKING_BASE_URL; 
+
+        const trackingUrl = MOCK_TRACKING_BASE_URL;
 
         const response = MESSAGES.passenger_tracking_info
             .replace('{busID}', busID)
             .replace('{location}', busData.last_location_name || 'Location update pending')
             .replace('{time}', lastUpdateTime)
             .replace('{trackingUrl}', trackingUrl);
-            
+
         await sendMessage(chatId, response, "HTML");
         return;
-        
+
     } catch (e) {
         await sendMessage(chatId, MESSAGES.db_error);
     }
@@ -1419,7 +1492,7 @@ async function handleShowLiveLocation(chatId, text) {
 async function handleBookingInput(chatId, text, state) {
     try {
         const booking = state.data;
-        
+
         if (state.state === 'AWAITING_BOARDING_POINT') {
             await handleBoardingPointInput(chatId, text, state);
             return;
@@ -1437,13 +1510,13 @@ async function handleBookingInput(chatId, text, state) {
             const name = passengerMatch[1].trim();
             const age = passengerMatch[2].trim();
             const aadhar = passengerMatch[3].trim();
-            
+
             // Assume Aadhar verification is successful for now (as the service is WIP)
-            
+
             booking.passengers.push({ name, age, aadhar, gender: booking.gender, seat: booking.seatNo });
-            
+
             await saveAppState(chatId, 'AWAITING_BOOKING_ACTION', booking);
-            
+
             const keyboard = {
                 inline_keyboard: [
                     [{ text: "➕ Add Another Passenger", callback_data: "cb_add_passenger" }],
@@ -1517,7 +1590,7 @@ async function handleUserShareLocation(chatId) {
 async function handleAadharApiSetupInput(chatId, text) {
     const urlRegex = /^(http|https):\/\/[^ "]+$/;
     const db = getFirebaseDb();
-    
+
     if (!text.match(urlRegex)) {
         return await sendMessage(chatId, "❌ Invalid URL format. Try again:", "HTML");
     }
@@ -1543,7 +1616,7 @@ async function handleStartTrackingFlow(chatId) {
     if (userRole !== 'manager' && userRole !== 'owner') {
         return await sendMessage(chatId, "❌ You do not have permission to start tracking.");
     }
-    
+
     await saveAppState(chatId, 'MANAGER_TRACKING_BUS_ID', {});
     await sendMessage(chatId, MESSAGES.manager_tracking_prompt, "HTML");
     return; // Explicit return
@@ -1557,19 +1630,25 @@ async function handleTrackingAction(chatId, action, busID) {
     const busDoc = await busRef.get();
 
     if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`, "HTML");
-    const busData = busDoc.data();
 
     if (action === 'start_live') {
         const state = await getAppState(chatId);
         const data = state.data;
-        
+
+        // CRITICAL FIX: Ensure duration is calculated from clean string here.
         const durationMs = parseDurationToMs(data.trackingDuration);
+
+        // Defensive check: Should have been caught in handleManagerInput, but check again.
+        if (durationMs < (15 * 60 * 1000)) {
+            return await sendMessage(chatId, "❌ Tracking duration is too short. Must be at least 15 minutes.", "HTML");
+        }
+
         const stopTime = new Date(Date.now() + durationMs);
         const stopTimeStr = stopTime.toLocaleTimeString('en-IN');
         const trackingUrl = MOCK_TRACKING_BASE_URL; // Required for manager message
 
         // 1. Update Bus Status to departed and activate tracking
-        await busRef.update({ 
+        await busRef.update({
             is_tracking: true,
             status: 'departed',
             last_location_name: data.trackingLocation, // Use manager's initial location
@@ -1589,14 +1668,14 @@ async function handleTrackingAction(chatId, action, busID) {
             .replace('{busID}', busID)
             .replace('{trackingUrl}', trackingUrl)
             .replace('{stopTime}', stopTimeStr);
-            
+
         await sendMessage(chatId, managerMessage, "HTML");
         return; // Explicit return
 
 
     } else if (action === 'stop') {
         // 1. Update Bus Status to arrived and deactivate tracking
-        await busRef.update({ 
+        await busRef.update({
             is_tracking: false,
             status: 'arrived',
             tracking_stop_time: admin.firestore.FieldValue.delete(),
@@ -1615,7 +1694,7 @@ async function handleManagerAddBus(chatId) {
         if (userRole !== 'manager' && userRole !== 'owner') {
              return await sendMessage(chatId, "❌ You do not have permission to add buses.");
         }
-        
+
         await saveAppState(chatId, 'MANAGER_ADD_BUS_NUMBER', {});
         await sendMessage(chatId, MESSAGES.manager_add_bus_init, "HTML");
         return; // Explicit return
@@ -1645,57 +1724,57 @@ async function handleManagerInput(chatId, text, state) {
             await saveAppState(chatId, state.state, data); // Keep state
             return await sendMessage(chatId, "❌ Please provide the required text input for this step.", "HTML");
         }
-        
+
         const textLower = text.toLowerCase().trim(); // Define a safe variable for lowercased checks
 
         switch (state.state) {
-            
+
             // --- NEW TRACKING FLOW ---
             case 'MANAGER_TRACKING_BUS_ID':
                 const busMatch = text.match(/(BUS\d+)/i); // Use raw text for matching
                 const busID = busMatch ? busMatch[1].toUpperCase() : null;
 
                 if (!busID) return await sendMessage(chatId, "❌ Invalid Bus ID format. Try again:", "HTML");
-                
+
                 const busDoc = await db.collection('buses').doc(busID).get();
                 if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`);
-                
+
                 data.busID = busID;
                 nextState = 'MANAGER_TRACKING_LOCATION';
                 response = MESSAGES.manager_tracking_location_prompt;
                 break;
-                
+
             case 'MANAGER_TRACKING_LOCATION':
                 data.trackingLocation = text.trim();
                 nextState = 'MANAGER_TRACKING_DURATION';
                 response = MESSAGES.manager_tracking_duration_prompt;
                 break;
-                
+
             case 'MANAGER_TRACKING_DURATION':
                 const durationMs = parseDurationToMs(text);
                 if (durationMs === 0 || durationMs < (15 * 60 * 1000)) { // Must be at least 15 mins for cron job visibility
                     // FIX: This error message is now correctly returned to the user
                     return await sendMessage(chatId, "❌ Invalid or too short duration. Please use format 'X hours' or 'Y minutes' (min 15 min):", "HTML");
                 }
-                
+
                 data.trackingDuration = text.trim(); // Save string for confirmation
-                
+
                 // Call the start function to save data and notify passengers
                 await handleTrackingAction(chatId, 'start_live', data.busID);
-                
+
                 // Response is handled inside handleTrackingAction, so return early
-                return; 
-                
+                return;
+
             // --- EXISTING FLOW CASES ---
 
-            case 'MANAGER_ADD_BUS_NUMBER': 
+            case 'MANAGER_ADD_BUS_NUMBER':
                 data.busNumber = text.toUpperCase().replace(/[^A-Z0-9\s-]/g, '');
                 if (!data.busNumber) return await sendMessage(chatId, "❌ Invalid Bus Number. Try again:", "HTML");
-                
+
                 nextState = 'MANAGER_ADD_BUS_NAME';
                 response = MESSAGES.manager_add_bus_number;
                 break;
-                
+
             case 'MANAGER_ADD_BUS_NAME':
                 data.busName = text;
                 nextState = 'MANAGER_ADD_BUS_ROUTE';
@@ -1711,18 +1790,18 @@ async function handleManagerInput(chatId, text, state) {
             case 'MANAGER_ADD_BUS_PRICE':
                 data.price = parseFloat(text.replace(/[^0-9.]/g, ''));
                 if (isNaN(data.price)) return await sendMessage(chatId, "❌ Invalid price. Enter a number (e.g., 850):", "HTML");
-                
+
                 nextState = 'MANAGER_ADD_BUS_TYPE';
                 response = MESSAGES.manager_add_bus_type;
                 break;
-                
+
             case 'MANAGER_ADD_BUS_TYPE':
                 // Use textLower for comparison
                 data.busLayout = textLower;
                 if (!validLayouts.includes(data.busLayout)) return await sendMessage(chatId, MESSAGES.manager_invalid_layout, "HTML");
 
                 data.seatsToConfigure = [];
-                
+
                 // Start 10 rows of seat configuration only for 'Sleeper' or 'Both' buses
                 if (data.busLayout === 'sleeper' || data.busLayout === 'both') {
                     data.currentRow = 1;
@@ -1737,7 +1816,7 @@ async function handleManagerInput(chatId, text, state) {
                     response = MESSAGES.manager_add_bus_depart_date;
                 }
                 break;
-                
+
             case 'MANAGER_ADD_SEAT_TYPE':
                 // Use textLower for comparison
                 const seatTypeInput = textLower;
@@ -1751,8 +1830,8 @@ async function handleManagerInput(chatId, text, state) {
                 });
 
                 data.currentRow++;
-                
-                if (data.currentRow <= 10) { 
+
+                if (data.currentRow <= 10) {
                     nextState = 'MANAGER_ADD_SEAT_TYPE';
                     response = MESSAGES.manager_add_seat_type.replace('{row}', data.currentRow);
                 } else {
@@ -1760,14 +1839,14 @@ async function handleManagerInput(chatId, text, state) {
                     response = MESSAGES.manager_add_bus_depart_date;
                 }
                 break;
-                
+
             case 'MANAGER_ADD_BUS_DEPART_DATE':
                 if (!text.match(dateRegex)) return await sendMessage(chatId, "❌ Invalid date format (YYYY-MM-DD). Try again:", "HTML");
                 data.departDate = text;
                 nextState = 'MANAGER_ADD_BUS_DEPART_TIME';
                 response = MESSAGES.manager_add_bus_depart_time;
                 break;
-                
+
             case 'MANAGER_ADD_BUS_DEPART_TIME':
                 if (!text.match(timeRegex)) return await sendMessage(chatId, "❌ Invalid time format (HH:MM). Try again:", "HTML");
                 data.departTime = text;
@@ -1789,37 +1868,37 @@ async function handleManagerInput(chatId, text, state) {
                 const uniqueBusId = `BUS${Date.now().toString().slice(-6)}`;
                 data.uniqueBusId = uniqueBusId;
                 data.boardingPoints = [];
-                
+
                 nextState = 'MANAGER_ADD_BUS_BOARDING_POINTS_INIT';
                 response = MESSAGES.manager_add_bus_boarding_init;
                 await saveAppState(chatId, nextState, data);
                 await sendMessage(chatId, response, "HTML");
-                return; 
+                return;
 
             case 'MANAGER_ADD_BUS_BOARDING_POINTS_INIT':
-            case 'MANAGER_ADD_BUS_BOARDING_POINTS_INPUT': 
+            case 'MANAGER_ADD_BUS_BOARDING_POINTS_INPUT':
                 const pointMatch = text.match(/^([^\/]+)\s*\/\s*(\d{2}:\d{2})$/i);
 
                 if (text.toUpperCase() === 'DONE' || data.boardingPoints.length >= 5) {
-                    
+
                     if (data.boardingPoints.length === 0) {
                         await sendMessage(chatId, "⚠️ No boarding points added. Proceeding without them.");
                     } else if (data.boardingPoints.length >= 5 && text.toUpperCase() !== 'DONE') {
                          await sendMessage(chatId, "⚠️ Max 5 boarding points reached. Proceeding to save.");
                     }
-                    
+
                     // --- FINAL BUS COMMIT ---
                     const userDoc = await db.collection('users').doc(String(chatId)).get();
                     const ownerName = userDoc.exists ? userDoc.data().name : 'System Owner';
-                    
+
                     if (userDoc.exists) {
                         await db.collection('users').doc(String(chatId)).update({ phone: data.managerPhone });
                     }
-                    
+
                     const routeParts = data.route.split(' to ').map(s => s.trim());
                     const from = routeParts[0] || 'Unknown';
                     const to = routeParts.length > 1 ? routeParts[1] : 'Unknown';
-                    
+
                     await db.collection('buses').doc(data.uniqueBusId).set({
                         bus_id: data.uniqueBusId,
                         bus_number: data.busNumber,
@@ -1827,14 +1906,14 @@ async function handleManagerInput(chatId, text, state) {
                         owner: ownerName,
                         from: from,
                         to: to,
-                        departure_time: `${data.departDate} ${data.departTime}`, 
+                        departure_time: `${data.departDate} ${data.departTime}`,
                         arrival_time: data.arriveTime,
-                        manager_chat_id: String(chatId), 
+                        manager_chat_id: String(chatId),
                         manager_phone: data.managerPhone,
                         price: data.price,
                         bus_type: data.busLayout,
                         seat_configuration: data.seatsToConfigure,
-                        boarding_points: data.boardingPoints, 
+                        boarding_points: data.boardingPoints,
                         total_seats: 40,
                         rating: 5.0,
                         status: 'scheduled',
@@ -1842,8 +1921,8 @@ async function handleManagerInput(chatId, text, state) {
                         last_location_name: from,
                         last_location_time: admin.firestore.FieldValue.serverTimestamp()
                     });
-                    
-                    await db.collection('user_state').doc(String(chatId)).delete(); 
+
+                    await db.collection('user_state').doc(String(chatId)).delete();
 
                     response = MESSAGES.manager_bus_saved
                         .replace('{busID}', data.uniqueBusId)
@@ -1863,12 +1942,12 @@ async function handleManagerInput(chatId, text, state) {
                     response = MESSAGES.manager_add_bus_boarding_invalid;
                 }
                 break;
-                
-            case 'MANAGER_AADHAR_API_SETUP': 
+
+            case 'MANAGER_AADHAR_API_SETUP':
                 // This state is handled by a separate function
                 await handleAadharApiSetupInput(chatId, text);
                 return;
-                
+
             case 'MANAGER_SYNC_SETUP_BUSID':
             case 'MANAGER_SYNC_SETUP_URL':
                 // This state is handled by a separate function
@@ -1896,9 +1975,9 @@ async function startUserRegistration(chatId, user) {
         const doc = await db.collection('users').doc(String(chatId)).get();
 
         if (doc.exists) {
-            const userName = user.first_name || 'User'; 
+            const userName = user.first_name || 'User';
             await sendMessage(chatId, MESSAGES.welcome_back.replace('{name}', userName));
-            await sendHelpMessage(chatId); 
+            await sendHelpMessage(chatId);
         } else {
             const keyboard = {
                 inline_keyboard: [
@@ -1930,11 +2009,11 @@ async function handleRoleSelection(chatId, user, callbackData) {
             join_date: admin.firestore.FieldValue.serverTimestamp()
         };
         await db.collection('users').doc(String(chatId)).set(newUser);
-        
+
         // --- Set state to AWAITING_PROFILE_DETAILS after role selection ---
         await saveAppState(chatId, 'AWAITING_PROFILE_DETAILS', { role: role });
         // ------------------------------------------------------------------------
-        
+
         await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "HTML");
         return;
     } catch (error) {
@@ -1952,44 +2031,44 @@ async function handleAddSeatsCommand(chatId, text) {
     if (userRole !== 'manager' && userRole !== 'owner') {
              return await sendMessage(chatId, "❌ You do not have permission to add seats.");
     }
-    
+
     const busID = match[1].toUpperCase();
     const count = parseInt(match[2], 10);
-        
+
     if (count > 40 || count < 1) return await sendMessage(chatId, "❌ Seat count must be between 1 and 40.");
 
     try {
         const db = getFirebaseDb();
         const busDoc = await db.collection('buses').doc(busID).get();
         if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID ${busID} does not exist. Please create it first.`);
-        
+
         const busData = busDoc.data();
         const config = busData.seat_configuration || [];
         if (config.length === 0) return await sendMessage(chatId, `❌ Bus ${busID} configuration missing. Please complete the bus creation flow.`);
-        
+
         await busDoc.ref.update({ total_seats: count }); // Update total seats count
 
         const batch = db.batch();
         let seatsAdded = 0;
-        
+
         const seatCols = ['A', 'B', 'C', 'D']; // Assume max 4 columns per row
 
         for (const rowConfig of config) {
             if (seatsAdded >= count) break;
-            
+
             const rowIndex = rowConfig.row;
             const seatType = rowConfig.type;
-            
+
             // Determine columns based on type (simplified assumption for sleeper vs seater)
-            const colsForThisRow = seatCols; 
+            const colsForThisRow = seatCols;
 
             for (let col of colsForThisRow) {
                 if (seatsAdded >= count) break;
-                
+
                 const seatNo = `${rowIndex}${col}`;
                 const docId = `${busID}-${seatNo}`;
                 const seatRef = db.collection('seats').doc(docId);
-                
+
                 batch.set(seatRef, {
                     bus_id: busID,
                     seat_no: seatNo,
@@ -1998,12 +2077,12 @@ async function handleAddSeatsCommand(chatId, text) {
                     type: seatType, // Uses the configured type
                     row: rowIndex,
                     col: col,
-                    booked_to_destination: null 
+                    booked_to_destination: null
                 });
                 seatsAdded++;
             }
         }
-        
+
         await batch.commit();
         await sendMessage(chatId, MESSAGES.manager_seats_saved.replace('{busID}', busID), "HTML");
         return;
@@ -2019,7 +2098,7 @@ async function handleInventorySyncSetup(chatId) {
     if (userRole !== 'manager' && userRole !== 'owner') {
              return await sendMessage(chatId, "❌ You do not have permission to manage inventory sync.");
     }
-    
+
     await saveAppState(chatId, 'MANAGER_SYNC_SETUP_BUSID', {});
     await sendMessage(chatId, MESSAGES.sync_setup_init, "HTML");
     return;
@@ -2038,22 +2117,22 @@ async function handleInventorySyncInput(chatId, text, state) {
                 data.busID = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
                 const busDoc = await db.collection('buses').doc(data.busID).get();
                 if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID ${data.busID} does not exist. Please create it first.`);
-                
+
                 nextState = 'MANAGER_SYNC_SETUP_URL';
                 response = MESSAGES.sync_setup_url.replace('{busID}', data.busID);
                 break;
-                
+
             case 'MANAGER_SYNC_SETUP_URL':
                 data.syncUrl = text.trim();
                 if (!data.syncUrl.match(urlRegex)) return await sendMessage(chatId, "❌ Invalid URL format. Must start with http:// or https://. Try again:");
-                
+
                 await db.collection('buses').doc(data.busID).update({
                     osp_api_endpoint: data.syncUrl,
                     sync_status: 'Pending Sync',
                     last_sync_attempt: admin.firestore.FieldValue.serverTimestamp()
                 });
-                
-                await saveAppState(chatId, 'IDLE', {}); 
+
+                await saveAppState(chatId, 'IDLE', {});
 
                 response = MESSAGES.sync_success.replace('{busID}', data.busID).replace('{url}', data.syncUrl);
                 await sendMessage(chatId, response, "HTML");
@@ -2096,7 +2175,7 @@ async function handleProfileUpdate(chatId, text) {
         // --- Clear state after successful profile update ---
         await saveAppState(chatId, 'IDLE', {});
         // ---------------------------------------------------------
-        
+
         await sendMessage(chatId, MESSAGES.profile_updated, "HTML");
         await sendHelpMessage(chatId);
 
@@ -2118,7 +2197,7 @@ async function handleSearchTextInput(chatId, text, state) {
 
     if (state.state === 'AWAITING_SEARCH_FROM') {
         data.from = city;
-        
+
         const snapshot = await db.collection('buses').where('from', '==', city).get();
         const availableDestinations = new Set();
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
@@ -2129,7 +2208,7 @@ async function handleSearchTextInput(chatId, text, state) {
         if (dests.length === 0) {
             return await sendMessage(chatId, MESSAGES.search_route_not_found.replace('{city}', city), "HTML");
         }
-        
+
         keyboard = {
             inline_keyboard: suggestedDests.map(loc => [{ text: loc, callback_data: `cb_search_to_${loc}` }])
         };
@@ -2158,7 +2237,7 @@ async function handleSearchTextInput(chatId, text, state) {
         await saveAppState(chatId, 'IDLE', {});
         return await showSearchResults(chatId, data.from, data.to, data.date);
     }
-    
+
     await saveAppState(chatId, nextState, data);
     await sendMessage(chatId, response, "HTML", keyboard);
 }
@@ -2167,7 +2246,7 @@ async function handleSearchTextInput(chatId, text, state) {
 async function handlePhoneUpdateInput(chatId, text) {
     const phone = text.replace(/[^0-9]/g, '');
     const phoneRegex = /^\d{10}$/;
-    
+
     if (!phone.match(phoneRegex)) {
         return await sendMessage(chatId, MESSAGES.phone_invalid);
     }
@@ -2175,7 +2254,7 @@ async function handlePhoneUpdateInput(chatId, text) {
     try {
         const db = getFirebaseDb();
         await db.collection('users').doc(String(chatId)).update({ phone: phone });
-        
+
         await saveAppState(chatId, 'IDLE', {});
         await sendMessage(chatId, MESSAGES.phone_updated_success, "HTML");
         await sendHelpMessage(chatId);
@@ -2205,7 +2284,7 @@ async function handleGetTicket(chatId, text) {
 
         // Retrieve new fields
         const passengerDestination = booking.seats[0].booked_to_destination || busInfo.to;
-        const boardingPoint = booking.boarding_point || 'N/A'; 
+        const boardingPoint = booking.boarding_point || 'N/A';
 
         const response = MESSAGES.payment_confirmed_ticket
             .replace('{busName}', busInfo.busName || 'N/A')
@@ -2297,28 +2376,28 @@ async function handleCancellation(chatId, text) {
         const seatsToRelease = booking.seats.map(s => s.seatNo);
         const batch = db.batch();
         seatsToRelease.forEach(seat => {
-            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
-            batch.update(seatRef, { 
-                status: 'available', 
-                booking_id: admin.firestore.FieldValue.delete(), 
+            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat}`); // Fixed bug: s.seatNo -> seat
+            batch.update(seatRef, {
+                status: 'available',
+                booking_id: admin.firestore.FieldValue.delete(),
                 booked_to_destination: admin.firestore.FieldValue.delete(), // Clear destination
-                gender: admin.firestore.FieldValue.delete()  // Clear gender for safety/privacy after cancellation
+                gender: admin.firestore.FieldValue.delete() // Clear gender for safety/privacy after cancellation
             });
         });
         await batch.commit();
 
         // 2. Update Booking Status
-        await bookingRef.update({ 
+        await bookingRef.update({
             status: 'cancelled',
             cancellation_time: admin.firestore.FieldValue.serverTimestamp()
         });
 
         // 3. Send Notifications
         const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
-        await sendManagerNotification(booking.busID, 'CANCELLATION', { 
-            bookingId: bookingId, 
-            seats: seatsToRelease, 
-            dateTime: now 
+        await sendManagerNotification(booking.busID, 'CANCELLATION', {
+            bookingId: bookingId,
+            seats: seatsToRelease,
+            dateTime: now
         });
 
         await sendMessage(chatId, MESSAGES.booking_cancelled.replace('{bookingId}', bookingId).replace('{dateTime}', now), "HTML");
@@ -2384,9 +2463,9 @@ async function handleStartTrackingCommand(chatId, text) {
 
     if (match) {
         const busID = match[1].toUpperCase();
-        
+
         // Skip straight to location input
-        await saveAppState(chatId, 'MANAGER_TRACKING_LOCATION', { busID: busID }); 
+        await saveAppState(chatId, 'MANAGER_TRACKING_LOCATION', { busID: busID });
         return await sendMessage(chatId, MESSAGES.manager_tracking_location_prompt, "HTML");
     } else {
         // Fallback to the guided flow prompt
@@ -2421,13 +2500,13 @@ async function handleGenderSelectionCallback(chatId, callbackData) {
     // 1. Simulate Safety Check (Only for Male Passengers booking next to Female)
     if (gender === 'M') {
         let adjacentSeatNo = null;
-        
-        // Determine adjacent seat
+
+        // Determine adjacent seat (simplified logic based on standard 2x2 or 2x1 layout)
         if (seatCol === 'A') adjacentSeatNo = `${seatRow}B`;
         else if (seatCol === 'B') adjacentSeatNo = `${seatRow}A`;
         else if (seatCol === 'C') adjacentSeatNo = `${seatRow}D`;
         else if (seatCol === 'D') adjacentSeatNo = `${seatRow}C`;
-        
+
         if (adjacentSeatNo) {
             const adjacentSeatDoc = await db.collection('seats').doc(`${busID}-${adjacentSeatNo}`).get();
             const adjacentSeatData = adjacentSeatDoc.data();
@@ -2435,7 +2514,7 @@ async function handleGenderSelectionCallback(chatId, callbackData) {
             // Check if adjacent seat exists, is occupied (booked or locked), and is female
             if (adjacentSeatDoc.exists && (adjacentSeatData.status === 'booked' || adjacentSeatData.status === 'locked') && adjacentSeatData.gender === 'F') {
                 // Seat must be released since booking is blocked
-                await unlockSeats({ busID, seats: [{ seatNo }] }); // Pass mock booking object to unlockSeats
+                // NOTE: The seat was not locked yet, only the state was updated. We skip locking and clear the state.
                 await saveAppState(chatId, 'IDLE', {});
                 return await sendMessage(chatId, MESSAGES.safety_violation.replace('{seatNo}', seatNo), "HTML");
             }
@@ -2444,23 +2523,23 @@ async function handleGenderSelectionCallback(chatId, callbackData) {
 
     // 2. Lock the seat and save gender and booked destination
     const seatRef = db.collection('seats').doc(`${busID}-${seatNo}`);
-    await seatRef.update({ 
-        status: 'locked', 
+    await seatRef.update({
+        status: 'locked',
         booked_to_destination: destination, // Use the captured destination
-        temp_chat_id: String(chatId), 
-        gender: gender 
+        temp_chat_id: String(chatId),
+        gender: gender
     });
 
     booking.gender = gender;
-    
+
     await saveAppState(chatId, 'AWAITING_PASSENGER_DETAILS', booking);
     await sendMessage(chatId, MESSAGES.details_prompt, "HTML");
 }
 
 // 12. handleAddPassengerCallback
 async function handleAddPassengerCallback(chatId) {
-    // Note: Multi-seat booking requires handling selection of the next *available* seat, 
-    // which complicates the current single-seat flow. 
+    // Note: Multi-seat booking requires handling selection of the next *available* seat,
+    // which complicates the current single-seat flow.
     // For simplicity, this currently sends a WIP message and resets.
     await saveAppState(chatId, 'IDLE', {});
     await sendMessage(chatId, MESSAGES.feature_wip + " Multi-seat selection coming soon! Please complete your current booking.", "HTML");
@@ -2485,7 +2564,7 @@ async function createPaymentOrder(chatId, bookingData) {
                 busID: bookingData.busID,
             }
         });
-        
+
         // CRITICAL CHECK: Ensure order creation was successful before proceeding
         if (!order || !order.id) {
              throw new Error("Razorpay returned an invalid or empty order object. Check API keys and permissions.");
@@ -2495,13 +2574,13 @@ async function createPaymentOrder(chatId, bookingData) {
         const uniqueBookingId = `BOOK${Date.now().toString().slice(-6)}`;
         const userDoc = await db.collection('users').doc(String(chatId)).get();
         const userData = userDoc.data() || {};
-        
+
         const finalBookingData = {
             chat_id: String(chatId),
             busID: bookingData.busID,
             boarding_point: bookingData.boardingPoint, // NEW FIELD ADDED
             // Seat object now includes the passenger's drop-off destination
-            seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender, booked_to_destination: bookingData.destination })), 
+            seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender, booked_to_destination: bookingData.destination })),
             passengers: bookingData.passengers,
             total_paid: amount,
             razorpay_order_id: order.id,
@@ -2509,11 +2588,11 @@ async function createPaymentOrder(chatId, bookingData) {
             phone: userData.phone || 'N/A',
             bookingId: uniqueBookingId
         };
-        
+
         await db.collection('payment_sessions').doc(order.id).set({ booking: finalBookingData });
-        
-        await saveAppState(chatId, 'AWAITING_PAYMENT', { 
-            razorpay_order_id: order.id, 
+
+        await saveAppState(chatId, 'AWAITING_PAYMENT', {
+            razorpay_order_id: order.id,
             busID: bookingData.busID,
             seats: finalBookingData.seats, // Keep seats in app state for cleanup
             bookingId: uniqueBookingId // Store booking ID for confirmation message on successful payment
@@ -2540,7 +2619,7 @@ async function createPaymentOrder(chatId, bookingData) {
         // IMPROVED LOGGING: This is the key change to help diagnose the invalid key issue.
         console.error("Razorpay Error:", e.message);
         // We must unlock the seat that was temporarily locked in handleGenderSelectionCallback
-        await unlockSeats({ busID: bookingData.busID, seats: [{ seatNo: bookingData.seatNo }] }); 
+        await unlockSeats({ busID: bookingData.busID, seats: [{ seatNo: bookingData.seatNo }] });
         await saveAppState(chatId, 'IDLE', {});
         await sendMessage(chatId, "❌ Failed to create payment order. Seats released. This is often caused by incorrect **Razorpay API Keys** (ID/Secret). Check your server logs for the full error.");
     }
@@ -2553,7 +2632,7 @@ async function handlePaymentVerification(chatId, stateData) {
 
     try {
         const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
-        
+
         if (!sessionDoc.exists) {
             // Case 1: Session disappeared (already handled by webhook/expired, likely success)
             return await sendMessage(chatId, `✅ Your payment might have already been processed! Please use "Get ticket ${stateData.bookingId || 'BOOKID'}" or check your tickets.`, "HTML");
@@ -2620,10 +2699,10 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             status: 'confirmed',
             created_at: now
         });
-        
+
         // 3. Delete Payment Session
         batch.delete(db.collection('payment_sessions').doc(orderId));
-        
+
         // 4. Clear App State (Only if triggered by manual user verification, webhook handles outside of user state)
         if (chatId) {
             batch.delete(db.collection('user_state').doc(String(chatId)));
@@ -2647,7 +2726,7 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             .replace('{departTime}', busInfo.time)
             .replace('{seatList}', seatsList)
             .replace('{boardingPoint}', boardingPoint) // NEW POPULATION
-            .replace('{destination}', passengerDestination) 
+            .replace('{destination}', passengerDestination)
             .replace('{name}', bookingData.passengers[0].name)
             .replace('{phone}', bookingData.phone)
             .replace('{orderId}', orderId)
@@ -2691,10 +2770,10 @@ async function handleBookingInfo(chatId) {
             const booking = doc.data();
             const date = booking.created_at ? booking.created_at.toDate().toLocaleDateString('en-IN') : 'N/A';
             const seats = booking.seats.map(s => s.seatNo).join(', ');
-            
+
             bookingList += `• <b>${doc.id}</b> (${booking.busID})\n`;
-            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
-            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
+            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
+            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
         });
 
         await sendMessage(chatId, bookingList + '💡 Use "Get ticket BOOKID" or "Check status BOOKID".', "HTML");
@@ -2710,7 +2789,7 @@ async function handleBookingInfo(chatId) {
 async function handleUserMessage(chatId, text, user) {
     const textLower = text ? text.toLowerCase().trim() : ''; // Defensive check for null/undefined text input
     let state;
-    
+
     // --- GLOBAL COMMANDS (Check first to allow flow breaking/reset) ---
     if (textLower === '/start' || textLower === '/help' || textLower === 'help') {
         try {
@@ -2731,7 +2810,7 @@ async function handleUserMessage(chatId, text, user) {
         } catch (e) {
             console.error('Error during global command cleanup:', e.message);
         }
-        
+
         // After cleanup, execute the command
         if (textLower === '/start') {
             await startUserRegistration(chatId, user);
@@ -2756,7 +2835,7 @@ async function handleUserMessage(chatId, text, user) {
             await handleProfileUpdate(chatId, text);
             return;
         }
-        
+
         // Handle in-flow commands
         if (state.state === 'AWAITING_BOARDING_POINT' || state.state === 'AWAITING_DESTINATION') { // NEW STATE ROUTING
             await handleBookingInput(chatId, text, state);
@@ -2769,7 +2848,7 @@ async function handleUserMessage(chatId, text, user) {
             await handleManagerInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_SYNC_SETUP')) {
              await handleInventorySyncInput(chatId, text, state);
-        } else if (state.state.startsWith('MANAGER_AWAITING_LIVE_ACTION')) { 
+        } else if (state.state.startsWith('MANAGER_AWAITING_LIVE_ACTION')) {
             const busID = state.data.busID;
              const keyboard = {
                  inline_keyboard: [
@@ -2778,7 +2857,7 @@ async function handleUserMessage(chatId, text, user) {
                  ]
              };
              await sendMessage(chatId, MESSAGES.manager_tracking_session_active.replace('{busID}', busID) + "\n\nPlease use the buttons below to control the session.", "HTML", keyboard);
-        } else if (state.state === 'AWAITING_NEW_PHONE') { 
+        } else if (state.state === 'AWAITING_NEW_PHONE') {
              await handlePhoneUpdateInput(chatId, text);
         } else if (state.state === 'AWAITING_PAYMENT') {
             const keyboard = {
@@ -2787,14 +2866,14 @@ async function handleUserMessage(chatId, text, user) {
                     [{ text: "❌ Cancel Booking", callback_data: "cb_payment_cancel" }]
                 ]
             };
-            
+
             await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', state.data.razorpay_order_id), "HTML", keyboard);
         }
         return;
     }
 
     // --- STANDARD COMMANDS (IDLE state) ---
-    
+
     // OWNER STAFF COMMANDS
     if (textLower.startsWith('assign manager') || textLower.startsWith('revoke manager')) {
         await handleStaffDelegation(chatId, text);
@@ -2815,7 +2894,7 @@ async function handleUserMessage(chatId, text, user) {
     else if (textLower.startsWith('check status')) {
         await handleCheckStatus(chatId, text);
     }
-    else if (textLower.startsWith('request seat change')) { 
+    else if (textLower.startsWith('request seat change')) {
         await handleSeatChangeRequest(chatId, text);
     }
     else if (textLower.startsWith('alert on')) { // PASSENGER FARE ALERT
@@ -2858,19 +2937,19 @@ async function handleUserMessage(chatId, text, user) {
     else if (textLower.startsWith('add seats')) {
         await handleAddSeatsCommand(chatId, text);
     }
-    else if (textLower.startsWith('show manifest')) { 
+    else if (textLower.startsWith('show manifest')) {
         await handleShowManifest(chatId, text);
     }
-    else if (textLower.startsWith('start tracking')) { 
+    else if (textLower.startsWith('start tracking')) {
         await handleStartTrackingCommand(chatId, text);
     }
-    else if (textLower.startsWith('track bus')) { 
+    else if (textLower.startsWith('track bus')) {
         await handlePassengerTracking(chatId, text);
     }
-    else if (textLower.startsWith('show live location')) { 
+    else if (textLower.startsWith('show live location')) {
         await handleShowLiveLocation(chatId, text);
     }
-    else { 
+    else {
         await sendMessage(chatId, MESSAGES.unknown_command, "HTML");
     }
 }
@@ -2879,7 +2958,7 @@ async function handleUserMessage(chatId, text, user) {
 
 app.post('/api/webhook', async (req, res) => {
     const update = req.body;
-    
+
     // --- CRITICAL INITIALIZATION CHECK ---
     try {
         getFirebaseDb();
@@ -2888,25 +2967,25 @@ app.post('/api/webhook', async (req, res) => {
         if (update.message) {
             await sendMessage(update.message.chat.id, MESSAGES.db_error + ". FIX: Check 'FIREBASE_CREDS_BASE64' variable in Vercel.");
         }
-        return res.status(500).send('Initialization Error'); 
+        return res.status(500).send('Initialization Error');
     }
-    
+
     try {
         if (update.message && update.message.text) {
             const message = update.message;
             const chatId = message.chat.id;
             const text = message.text ? message.text.trim() : '';
             const user = message.from;
-            
-            await sendChatAction(chatId, "typing"); 
+
+            await sendChatAction(chatId, "typing");
             await handleUserMessage(chatId, text, user);
-        
+
         } else if (update.callback_query) {
             const callback = update.callback_query;
             const chatId = callback.message.chat.id;
             const callbackData = callback.data;
             const messageId = callback.message.message_id;
-            
+
             await answerCallbackQuery(callback.id);
             // Delete the keyboard unless it's a search step or tracking action (which need to persist/re-render)
             if (!callbackData.startsWith('cb_search_') && !callbackData.startsWith('cb_live_action_') && !callbackData.startsWith('cb_book_seat_')) {
@@ -2914,7 +2993,7 @@ app.post('/api/webhook', async (req, res) => {
             }
 
             await sendChatAction(chatId, "typing");
-            
+
             const state = await getAppState(chatId);
 
             // --- ROUTE CALLBACKS ---
@@ -2925,27 +3004,27 @@ app.post('/api/webhook', async (req, res) => {
                  await handleSearchInputCallback(chatId, callbackData, state);
             } else if (callbackData.startsWith('cb_book_seat_')) { // NEW INTERACTIVE SEAT SELECTION
                 await handleBookSeatCallback(chatId, callbackData);
-            } else if (callbackData === 'cb_payment_confirm') { 
+            } else if (callbackData === 'cb_payment_confirm') {
                 if (state.state === 'AWAITING_PAYMENT') {
                     await handlePaymentVerification(chatId, state.data);
                 } else {
                     await sendMessage(chatId, "❌ No active payment to confirm.");
                 }
-            } else if (callbackData === 'cb_payment_cancel') { 
+            } else if (callbackData === 'cb_payment_cancel') {
                 await handlePaymentCancelCallback(chatId);
             } else if (callbackData === 'cb_book_bus') {
                 await handleBusSearch(chatId);
             } else if (callbackData === 'cb_booking_single') {
-                await handleBusSearch(chatId); 
+                await handleBusSearch(chatId);
             } else if (callbackData === 'cb_my_booking') {
                 await handleBookingInfo(chatId);
             } else if (callbackData === 'cb_my_profile') {
                 await handleUserProfile(chatId);
             } else if (callbackData === 'cb_add_bus_manager') {
                 await handleManagerAddBus(chatId);
-            } else if (callbackData === 'cb_inventory_sync') { 
+            } else if (callbackData === 'cb_inventory_sync') {
                 await handleInventorySyncSetup(chatId);
-            } else if (callbackData === 'cb_aadhar_api_setup') { 
+            } else if (callbackData === 'cb_aadhar_api_setup') {
                 const userRole = await getUserRole(chatId);
                 if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, "❌ Permission denied.");
                 await saveAppState(chatId, 'MANAGER_AADHAR_API_SETUP', {});
@@ -2954,15 +3033,15 @@ app.post('/api/webhook', async (req, res) => {
                 const userRole = await getUserRole(chatId);
                 if (userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
                 await sendMessage(chatId, MESSAGES.owner_manage_staff_prompt, "HTML");
-            } else if (callbackData === 'cb_show_my_trips') { 
+            } else if (callbackData === 'cb_show_my_trips') {
                 await handleShowMyTrips(chatId);
-            } else if (callbackData === 'cb_update_phone') { 
+            } else if (callbackData === 'cb_update_phone') {
                 await handleUpdatePhoneNumberCallback(chatId);
-            } else if (callbackData.startsWith('cb_select_gender_')) { 
+            } else if (callbackData.startsWith('cb_select_gender_')) {
                  await handleGenderSelectionCallback(chatId, callbackData);
-            } else if (callbackData === 'cb_add_passenger') { 
+            } else if (callbackData === 'cb_add_passenger') {
                 await handleAddPassengerCallback(chatId);
-            } else if (callbackData === 'cb_book_finish') { 
+            } else if (callbackData === 'cb_book_finish') {
                 if (state.state === 'AWAITING_BOOKING_ACTION') {
                     await createPaymentOrder(chatId, state.data);
                 } else {
@@ -2974,7 +3053,7 @@ app.post('/api/webhook', async (req, res) => {
                 await sendMessage(chatId, MESSAGES.feature_wip);
             } else if (callbackData === 'cb_show_manifest_prompt') {
                 await sendMessage(chatId, "📋 Please send the manifest command with the Bus ID.\nExample: <pre>Show manifest BUS101</pre>", "HTML");
-            } else if (callbackData === 'cb_start_route_tracking_prompt') { 
+            } else if (callbackData === 'cb_start_route_tracking_prompt') {
                 await handleStartTrackingFlow(chatId);
             } else if (callbackData === 'cb_show_revenue_prompt') {
                 await sendMessage(chatId, "💵 Please specify the date for the revenue report.\nExample: <pre>Show revenue 2025-11-02</pre>", "HTML");
@@ -3007,7 +3086,7 @@ app.post('/api/webhook', async (req, res) => {
 // --- RAZORPAY WEBHOOK ENDPOINT ---
 app.post('/api/razorpay/webhook', async (req, res) => {
     const signature = req.headers['x-razorpay-signature'];
-    const payload = req.rawBody; 
+    const payload = req.rawBody;
 
     try { getFirebaseDb(); } catch (e) {
         console.error("CRITICAL FIREBASE INITIALIZATION FAILED during Razorpay webhook.", e.message);
@@ -3018,29 +3097,29 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 
     if (RAZORPAY_WEBHOOK_SECRET && !verifyRazorpaySignature(payload, signature)) {
         console.error("WEBHOOK ERROR: Signature verification failed. Ignoring update.");
-        return; 
+        return;
     }
 
     const event = req.body.event;
-    
+
     if (event === 'payment.failed' || event === 'order.paid') {
         const orderId = req.body.payload.order.entity.id;
         const db = getFirebaseDb();
-        
+
         const sessionDoc = await db.collection('payment_sessions').doc(orderId).get();
 
         if (sessionDoc.exists) {
             const bookingData = sessionDoc.data().booking;
-            
+
             if (event === 'order.paid') {
                 // Pass null for chatId since this is a webhook, not a user interaction
-                await commitFinalBookingBatch(null, bookingData); 
+                await commitFinalBookingBatch(null, bookingData);
             } else if (event === 'payment.failed') {
                 // Unlock seats uses the seat array from the booking data.
                 await unlockSeats(bookingData);
                 await db.collection('payment_sessions').doc(orderId).delete();
                 // We send the message back to the user's chat ID
-                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed); 
+                await sendMessage(bookingData.chat_id, MESSAGES.payment_failed);
             }
         }
     }
@@ -3048,8 +3127,8 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 
 // Add a simple health check endpoint
 app.get('/', (req, res) => {
-    res.status(200).json({ 
-        status: 'OK', 
+    res.status(200).json({
+        status: 'OK',
         message: 'GoRoute Telegram Bot is running',
         timestamp: new Date().toISOString()
     });
@@ -3057,5 +3136,6 @@ app.get('/', (req, res) => {
 
 // Start the server
 module.exports = app;
-// Export cron function so Vercel can run it
+// Export cron functions so Vercel can run them
 module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
+module.exports.sendFareAlertNotifications = sendFareAlertNotifications;
