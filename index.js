@@ -351,10 +351,10 @@ async function unlockSeats(booking) {
         const batch = db.batch();
         if (booking && booking.seats && Array.isArray(booking.seats)) {
              booking.seats.forEach(seat => {
-                const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
-                // Only clear fields related to temporary lock
-                batch.set(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), booked_to_destination: admin.firestore.FieldValue.delete() }, { merge: true });
-            });
+                 const seatRef = db.collection('seats').doc(`${booking.busID}-${seat.seatNo}`);
+                 // Only clear fields related to temporary lock
+                 batch.set(seatRef, { status: 'available', temp_chat_id: admin.firestore.FieldValue.delete(), booked_to_destination: admin.firestore.FieldValue.delete() }, { merge: true });
+             });
         }
         await batch.commit();
     } catch (e) {
@@ -751,10 +751,10 @@ async function sendHelpMessage(chatId) {
 
         if (userRole === 'user' || userRole === 'unregistered') {
              baseButtons.push(
-                [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
-                [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
-                [{ text: "🔔 Set Fare Alert", callback_data: "cb_fare_alert_prompt"}]
-            );
+                 [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
+                 [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
+                 [{ text: "🔔 Set Fare Alert", callback_data: "cb_fare_alert_prompt"}]
+             );
         }
 
         let finalButtons = baseButtons;
@@ -1020,8 +1020,8 @@ async function handleShowFareAlerts(chatId) {
             const alert = doc.data();
             const date = alert.created_at ? alert.created_at.toDate().toLocaleString('en-IN') : 'N/A';
             alertList += `${index + 1}. <b>${alert.from}</b> → <b>${alert.to}</b> @ ${alert.time}\n`;
-            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
-            alertList += `  Set On: ${date}\n\n`;
+            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
+            alertList += `  Set On: ${date}\n\n`;
         });
 
         alertList += "💡 To delete an alert, notify the user or manage the record in the database.";
@@ -1047,13 +1047,13 @@ async function handleUserProfile(chatId) {
             const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
 
             const profileText = `👤 <b>Your Profile</b>\n\n` +
-                                     `<b>Name:</b> ${user.name || 'Not set'}\n` +
-                                     `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
-                                     `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
-                                     `<b>Aadhar:</b> ${user.aadhar || 'Not set'}\n` +
-                                     `<b>Role:</b> ${user.role || 'user'}\n` +
-                                     `<b>Status:</b> ${user.status || 'N/A'}\n` +
-                                     `<b>Member since:</b> ${joinDate}`;
+                                 `<b>Name:</b> ${user.name || 'Not set'}\n` +
+                                 `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
+                                 `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
+                                 `<b>Aadhar:</b> ${user.aadhar || 'Not set'}\n` +
+                                 `<b>Role:</b> ${user.role || 'user'}\n` +
+                                 `<b>Status:</b> ${user.status || 'N/A'}\n` +
+                                 `<b>Member since:</b> ${joinDate}`;
 
             await sendMessage(chatId, profileText, "HTML");
             return; // Explicit return
@@ -1110,7 +1110,7 @@ async function handleShowMyTrips(chatId) {
         buses.forEach(data => {
             const date = data.departure_time.split(' ')[0];
             tripList += `\n• <b>${data.bus_id}</b>: ${data.from} → ${data.to}\n`;
-            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
+            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
         });
 
         const response = MESSAGES.manager_list_trips.replace('{tripList}', tripList);
@@ -1136,12 +1136,12 @@ async function showSearchResults(chatId, from, to, date) {
         snapshot.forEach(doc => {
             const data = doc.data();
             if (data.departure_time.startsWith(date)) {
-                 buses.push({
-                    busID: data.bus_id, from: data.from, to: data.to,
-                    date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
-                    owner: data.bus_name, price: data.price, busType: data.bus_type,
-                    rating: data.rating || 4.2, total_seats: data.total_seats || 40
-                });
+             buses.push({
+                 busID: data.bus_id, from: data.from, to: data.to,
+                 date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
+                 owner: data.bus_name, price: data.price, busType: data.bus_type,
+                 rating: data.rating || 4.2, total_seats: data.total_seats || 40
+             });
             }
         });
 
@@ -2625,7 +2625,7 @@ async function createPaymentOrder(chatId, bookingData) {
     }
 }
 
-// 14. handlePaymentVerification (Removed test bypass)
+// 14. handlePaymentVerification (MODIFIED FOR TESTING: IMMEDIATE CONFIRMATION)
 async function handlePaymentVerification(chatId, stateData) {
     const orderId = stateData.razorpay_order_id;
     const db = getFirebaseDb();
@@ -2638,20 +2638,20 @@ async function handlePaymentVerification(chatId, stateData) {
             return await sendMessage(chatId, `✅ Your payment might have already been processed! Please use "Get ticket ${stateData.bookingId || 'BOOKID'}" or check your tickets.`, "HTML");
         }
 
-        // The session still exists, meaning the webhook has not yet confirmed success.
-        const keyboard = {
-            inline_keyboard: [
-                [{ text: "✅ I have Paid (Re-check)", callback_data: "cb_payment_confirm" }],
-                [{ text: "❌ Cancel Booking", callback_data: "cb_payment_cancel" }]
-            ]
-        };
-        await sendMessage(chatId, MESSAGES.payment_awaiting.replace('{orderId}', orderId) + "\n\n(We are waiting for the Razorpay webhook for final confirmation.)", "HTML", keyboard);
+        const bookingData = sessionDoc.data().booking;
+
+        // --- TEST BYPASS IMPLEMENTATION (Immediate Success Simulation) ---
+        console.log(`[TEST BYPASS] Simulating successful payment for Order ID: ${orderId}`);
+        await commitFinalBookingBatch(chatId, bookingData);
+        // commitFinalBookingBatch handles clearing the user state, updating seats, and sending the ticket message.
+        // --- END TEST BYPASS ---
 
     } catch (e) {
-        console.error("Verification Error:", e.message);
-        await sendMessage(chatId, "❌ An error occurred while verifying payment status. Please try again later.");
+        console.error("Verification Error during test bypass:", e.message);
+        await sendMessage(chatId, "❌ An error occurred while simulating payment. Please try again later.");
     }
 }
+
 
 // 15. handlePaymentCancelCallback
 async function handlePaymentCancelCallback(chatId) {
@@ -2772,8 +2772,8 @@ async function handleBookingInfo(chatId) {
             const seats = booking.seats.map(s => s.seatNo).join(', ');
 
             bookingList += `• <b>${doc.id}</b> (${booking.busID})\n`;
-            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
-            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
+            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
+            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
         });
 
         await sendMessage(chatId, bookingList + '💡 Use "Get ticket BOOKID" or "Check status BOOKID".', "HTML");
@@ -3000,8 +3000,8 @@ app.post('/api/webhook', async (req, res) => {
             if (callbackData.startsWith('cb_register_role_')) {
                 await handleRoleSelection(chatId, callback.from, callbackData);
             } else if (callbackData.startsWith('cb_search_from_') || callbackData.startsWith('cb_search_to_') || callbackData.startsWith('cb_search_date_')) {
-                 // Calls the search input function
-                 await handleSearchInputCallback(chatId, callbackData, state);
+                // Calls the search input function
+                await handleSearchInputCallback(chatId, callbackData, state);
             } else if (callbackData.startsWith('cb_book_seat_')) { // NEW INTERACTIVE SEAT SELECTION
                 await handleBookSeatCallback(chatId, callbackData);
             } else if (callbackData === 'cb_payment_confirm') {
