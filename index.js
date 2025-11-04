@@ -1179,8 +1179,8 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
 
     // Handle initial Source selection (step 1)
     if (state.state === 'AWAITING_SEARCH_FROM') {
-        // This branch should ideally be unreachable since buttons are removed,
-        // but we keep the robust logic in case a cached button is clicked.
+        // This branch should ideally be unreachable since city buttons are explicitly removed from the prompt,
+        // but it handles old/cached button clicks for robustness.
         data.from = callbackData.replace('cb_search_from_', '');
 
         const snapshot = await db.collection('buses').where('from', '==', data.from).get();
@@ -1214,7 +1214,7 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
         nextState = 'AWAITING_SEARCH_DATE';
         response = MESSAGES.search_date;
 
-    // Handle Date selection (step 3)
+    // Handle Date selection (step 3 - ONLY ACTIVE BUTTON FLOW)
     } else if (state.state === 'AWAITING_SEARCH_DATE') {
         data.dateType = callbackData.replace('cb_search_date_', '');
         let targetDate;
@@ -2184,7 +2184,7 @@ async function handleProfileUpdate(chatId, text) {
 }
 
 // 2. handleSearchTextInput
-// MODIFIED: Removes city button generation in the first two steps
+// MODIFIED: Enforces text input for source and destination, and then presents date buttons.
 async function handleSearchTextInput(chatId, text, state) {
     const db = getFirebaseDb();
     let data = state.data;
@@ -2203,15 +2203,13 @@ async function handleSearchTextInput(chatId, text, state) {
         snapshot.forEach(doc => availableDestinations.add(doc.data().to));
 
         const dests = Array.from(availableDestinations).sort();
-        // Removed: suggestedDests generation (relying purely on user text input now)
-
+        // Since we rely entirely on user input for cities now, we only need to validate the origin city exists
+        
         if (dests.length === 0) {
             return await sendMessage(chatId, MESSAGES.search_route_not_found.replace('{city}', city), "HTML");
         }
 
-        // Removed: keyboard generation for suggested destinations
         keyboard = null; 
-
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
 
@@ -2754,25 +2752,41 @@ async function commitFinalBookingBatch(chatId, bookingData) {
 async function handleBookingInfo(chatId) {
     try {
         const db = getFirebaseDb();
+        
+        // FIX: Removed orderBy('created_at', 'desc') to avoid FAILED_PRECONDITION index error.
+        // Data is now fetched and sorted locally in JavaScript.
         const snapshot = await db.collection('bookings')
             .where('chat_id', '==', String(chatId))
             .where('status', 'in', ['confirmed', 'boarded', 'pending_payment'])
-            .orderBy('created_at', 'desc')
-            .limit(10)
+            .limit(100) // Increased limit for safer in-memory sorting
             .get();
 
         if (snapshot.empty) {
             return await sendMessage(chatId, MESSAGES.no_bookings);
         }
 
+        // Sort data locally by created_at in descending order
+        let bookings = snapshot.docs.map(doc => ({
+            id: doc.id,
+            ...doc.data()
+        }));
+
+        bookings.sort((a, b) => {
+            const dateA = a.created_at ? a.created_at.toDate().getTime() : 0;
+            const dateB = b.created_at ? b.created_at.toDate().getTime() : 0;
+            return dateB - dateA; // Descending order (newest first)
+        });
+        
+        // Limit to the top 10 recent bookings
+        const recentBookings = bookings.slice(0, 10);
+        
         let bookingList = "🎫 <b>Your Recent Bookings:</b>\n\n";
 
-        snapshot.docs.forEach(doc => {
-            const booking = doc.data();
+        recentBookings.forEach(booking => {
             const date = booking.created_at ? booking.created_at.toDate().toLocaleDateString('en-IN') : 'N/A';
             const seats = booking.seats.map(s => s.seatNo).join(', ');
 
-            bookingList += `• <b>${doc.id}</b> (${booking.busID})\n`;
+            bookingList += `• <b>${booking.id}</b> (${booking.busID})\n`;
             bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
             bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
         });
