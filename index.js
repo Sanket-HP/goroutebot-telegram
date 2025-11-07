@@ -121,6 +121,7 @@ Time: {dateTime}
     search_route_not_found: "❌ No routes available from <b>{city}</b>. Please check your spelling or try another city.",
     search_date: "📅 <b>Travel Date:</b> When do you plan to travel?",
     search_results: "🚌 <b>Search Results ({from} to {to}, {date})</b> 🚌\n\n",
+    bus_image_link: "<a href='{imageUrl}'>[🖼️ View Bus Image {index}]</a>", // New link format for images
 
     // NEW MANIFEST MESSAGE
     manifest_header: "📋 <b>Bus Manifest - {busID}</b>\nRoute: {from} → {to}\nDate: {date}\nTotal Booked Seats: {count}\n\n",
@@ -128,7 +129,7 @@ Time: {dateTime}
     no_manifest: "❌ No confirmed bookings found for bus {busID}.",
 
     // New Seat Map Header (UPDATED)
-    seat_map_header: "🚍 <b>Seat Map - {busID}</b> ({layout})\nRoute: {from} → {to}\nDate: {date} 🕒 {time}\n\nLegend: ✅ Available • ⚫ Booked/Locked • 🚺 Female • 🚹 Male • 💺 Seater • 🛏️ Sleeper",
+    seat_map_header: "🚍 <b>Seat Map - {busID}</b> ({layout})\nRoute: {from} → {to}\nDate: {date} 🕒 {time}\n\n{imageLinks}Legend: ✅ Available • ⚫ Booked/Locked • 🚺 Female • 🚹 Male • 💺 Seater • 🛏️ Sleeper",
     seat_map_group_header: "\n--- {type} Seats ---\n",
     seat_map_list_item: " {seatNo} ({typeIcon}) {statusIcon} | Booked To: {destination}",
 
@@ -166,7 +167,7 @@ Time: {dateTime}
     aadhar_api_init: "🔒 <b>Aadhar Verification Setup:</b> Enter the verification API endpoint URL:",
     aadhar_api_success: "✅ Aadhar API Endpoint set to: {url}",
 
-    // Manager
+    // Manager - Bus Creation (UPDATED FOR IMAGES)
     manager_add_bus_init: "📝 <b>Bus Creation:</b> Enter the <b>Bus Number</b> (e.g., <pre>MH-12 AB 1234</pre>):",
     manager_add_bus_number: "🚌 Enter the <b>Bus Name</b> (e.g., <pre>Sharma Travels</pre>):",
     manager_add_bus_route: "📍 Enter the Route (e.g., <pre>Delhi to Jaipur</pre>):",
@@ -176,8 +177,9 @@ Time: {dateTime}
     manager_add_bus_depart_date: "📅 Enter the Departure Date (YYYY-MM-DD, e.g., <pre>2025-12-25</pre>):",
     manager_add_bus_depart_time: "🕒 Enter the Departure Time (HH:MM, 24h format, e.g., <pre>08:30</pre>):",
     manager_add_bus_arrive_time: "🕡 Enter the Estimated Arrival Time (HH:MM, 24h format, e.g., <pre>18:00</pre>):",
-    manager_add_bus_manager_phone: "📞 <b>Final Step:</b> Enter your Phone Number to associate with the bus:",
-    manager_add_bus_boarding_init: "📍 <b>Boarding Points:</b> Enter the points and times in the format:\n<pre>[Point Name] / [HH:MM]</pre>\n\nSend 'DONE' when finished (max 5 points):",
+    manager_add_bus_manager_phone: "📞 <b>Step 1/5:</b> Enter your Phone Number to associate with the bus:",
+    manager_add_bus_image_prompt: "🖼️ <b>Step {current}/{total} Bus Image:</b> Enter the <b>direct image URL</b> for image {index} (e.g., <pre>https://example.com/bus1.jpg</pre>). Send **SKIP** if not available:",
+    manager_add_bus_boarding_init: "📍 <b>Step 5/5 Boarding Points:</b> Enter the points and times in the format:\n<pre>[Point Name] / [HH:MM]</pre>\n\nSend 'DONE' when finished (max 5 points):",
     manager_add_bus_boarding_more: "✅ Point added. Add another (or send 'DONE'):",
     manager_add_bus_boarding_invalid: "❌ Invalid format. Please use: <pre>[Point Name] / [HH:MM]</pre>",
     manager_bus_saved: "✅ <b>Bus {busID} created!</b> Route: {route}. Next, add seats: \n\n<b>Next Step:</b> Now, create all seats for this bus by typing:\n<pre>add seats {busID} 40</pre>",
@@ -185,6 +187,12 @@ Time: {dateTime}
     manager_seats_invalid: "❌ Invalid format. Please use: <pre>add seats [BUSID] [COUNT]</pre>",
     manager_invalid_layout: "❌ Invalid layout. Please enter <pre>Seater</pre>, <pre>Sleeper</pre>, or <pre>Both</pre>.",
     manager_invalid_seat_type: "❌ Invalid seat type. Please enter <pre>Sleeper Upper</pre>, <pre>Sleeper Lower</pre>, or <pre>Seater</pre>.",
+
+    // Manager - Bus Deletion
+    manager_delete_bus_invalid: "❌ Invalid format. Use: <pre>Delete bus BUSID</pre>",
+    manager_delete_bus_confirm: "⚠️ <b>CONFIRM DELETION:</b> Are you sure you want to delete bus <b>{busID}</b>? This will permanently delete all associated seats and bookings.\n\nType <b>YES DELETE {busID}</b> to confirm.",
+    manager_delete_bus_not_found: "❌ Bus ID <b>{busID}</b> not found.",
+    manager_delete_bus_success: "🗑️ Bus <b>{busID}</b>, all its seats, and bookings have been permanently deleted.",
 
     // Manager Notifications (MISSING MESSAGES - ADDED HERE)
     manager_notification_booking: "🔔 <b>NEW BOOKING ALERT ({busID})</b>\n\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}\n\nUse <pre>show manifest {busID}</pre> to view the full list.",
@@ -379,7 +387,8 @@ async function getBusInfo(busID) {
             date: data.departure_time.split(' ')[0],
             time: data.departure_time.split(' ')[1],
             boardingPoints: data.boarding_points || [],
-            seatConfig: data.seat_configuration || [] // ADDED
+            seatConfig: data.seat_configuration || [],
+            images: data.images || [] // ADDED: Fetch images
         };
     } catch (e) {
         console.error("Error fetching bus info:", e.message);
@@ -779,7 +788,7 @@ async function handleStartSearch(chatId) {
     try {
         // --- MODIFIED: REMOVED suggested cities buttons ---
         // The user must now type the city name.
-        
+         
         // Clear keyboard in the prompt to encourage text input, passing null.
         await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 });
         await sendMessage(chatId, MESSAGES.search_from, "HTML", null); // Passing null for keyboard
@@ -837,6 +846,57 @@ async function handleShowRevenue(chatId, text) {
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
+
+// --- MANAGER/OWNER: DELETE BUS (NEW) ---
+async function handleDeleteBus(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
+
+    const match = text.match(/delete bus\s+(BUS\d+)/i);
+    const confirmMatch = text.match(/YES DELETE\s+(BUS\d+)/i);
+
+    let busID = match ? match[1].toUpperCase() : (confirmMatch ? confirmMatch[1].toUpperCase() : null);
+
+    if (!busID) return await sendMessage(chatId, MESSAGES.manager_delete_bus_invalid, "HTML");
+
+    try {
+        const db = getFirebaseDb();
+        const busRef = db.collection('buses').doc(busID);
+        const busDoc = await busRef.get();
+
+        if (!busDoc.exists) return await sendMessage(chatId, MESSAGES.manager_delete_bus_not_found.replace('{busID}', busID), "HTML");
+
+        // --- Step 1: Confirmation Prompt ---
+        if (!confirmMatch) {
+            await saveAppState(chatId, 'AWAITING_BUS_DELETE_CONFIRMATION', { busID: busID });
+            const response = MESSAGES.manager_delete_bus_confirm.replace('{busID}', busID);
+            return await sendMessage(chatId, response, "HTML");
+        }
+
+        // --- Step 2: Execution (after confirmation) ---
+        // A. Delete Seats
+        const seatsSnapshot = await db.collection('seats').where('bus_id', '==', busID).get();
+        const deleteBatch = db.batch();
+        seatsSnapshot.forEach(doc => deleteBatch.delete(doc.ref));
+
+        // B. Delete Bookings (Confirmed, Pending, etc.)
+        const bookingsSnapshot = await db.collection('bookings').where('busID', '==', busID).get();
+        bookingsSnapshot.forEach(doc => deleteBatch.delete(doc.ref));
+
+        // C. Delete the Bus document itself
+        deleteBatch.delete(busRef);
+
+        await deleteBatch.commit();
+        await saveAppState(chatId, 'IDLE', {}); // Clear state
+        await sendMessage(chatId, MESSAGES.manager_delete_bus_success.replace('{busID}', busID), "HTML");
+        return;
+
+    } catch (e) {
+        console.error("Error deleting bus:", e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
 
 // --- OWNER: GLOBAL BUS STATUS ---
 
@@ -1120,7 +1180,7 @@ async function handleShowMyTrips(chatId) {
     }
 }
 
-// --- showSearchResults function ---
+// --- showSearchResults function (UPDATED FOR IMAGE DISPLAY) ---
 async function showSearchResults(chatId, from, to, date) {
     try {
         const db = getFirebaseDb();
@@ -1138,7 +1198,8 @@ async function showSearchResults(chatId, from, to, date) {
                  busID: data.bus_id, from: data.from, to: data.to,
                  date: data.departure_time.split(' ')[0], time: data.departure_time.split(' ')[1],
                  owner: data.bus_name, price: data.price, busType: data.bus_type,
-                 rating: data.rating || 4.2, total_seats: data.total_seats || 40
+                 rating: data.rating || 4.2, total_seats: data.total_seats || 40,
+                 images: data.images || [] // Fetch images
              });
             }
         });
@@ -1152,10 +1213,17 @@ async function showSearchResults(chatId, from, to, date) {
             const seatsSnapshot = await db.collection('seats').where('bus_id', '==', bus.busID).where('status', '==', 'available').get();
             const availableSeats = seatsSnapshot.size;
 
+            let imageLink = '';
+            if (bus.images.length > 0) {
+                // Display link to the first image
+                imageLink = MESSAGES.bus_image_link.replace('{imageUrl}', bus.images[0]).replace('{index}', '1');
+            }
+
             response += `<b>${bus.busID}</b> - ${bus.owner}\n`;
             response += `🕒 ${bus.time}\n`;
             response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
             response += `💺 ${availableSeats} seats available\n`;
+            if (imageLink) response += `${imageLink}\n`; // Add image link here
             response += `📋 "Show seats ${bus.busID}" to view seats\n\n`;
         }
         await sendMessage(chatId, response, "HTML");
@@ -1244,6 +1312,7 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
 /**
  * IMPROVEMENT: Reworked seat map to be a dynamic list grouped by type and status,
  * and added interactive buttons for available seats.
+ * UPDATED: Added image display links to the header.
  */
 async function handleSeatMap(chatId, text) {
     try {
@@ -1268,6 +1337,15 @@ async function handleSeatMap(chatId, text) {
         else if (busInfo.busType === 'sleeper') descriptiveLayout = MESSAGES.bus_layout_sleeper;
         else if (busInfo.busType === 'both') descriptiveLayout = MESSAGES.bus_layout_both;
         else descriptiveLayout = busInfo.busType;
+        
+        // Generate image links for the header
+        let imageLinksHtml = '';
+        if (busInfo.images.length > 0) {
+            imageLinksHtml = busInfo.images.slice(0, 3).map((url, index) =>
+                MESSAGES.bus_image_link.replace('{imageUrl}', url).replace('{index}', index + 1)
+            ).join(' | ') + "\n\n";
+        }
+
 
         seatsSnapshot.forEach(doc => {
             const data = doc.data();
@@ -1283,7 +1361,8 @@ async function handleSeatMap(chatId, text) {
             .replace('{from}', busInfo.from)
             .replace('{to}', busInfo.to)
             .replace('{date}', busInfo.date)
-            .replace('{time}', busInfo.time);
+            .replace('{time}', busInfo.time)
+            .replace('{imageLinks}', imageLinksHtml); // Insert image links
 
         let availableCount = 0;
 
@@ -1380,8 +1459,8 @@ async function handleBookSeatCallback(chatId, callbackData) {
     const seatDoc = await seatRef.get();
 
     if (!seatDoc.exists || seatDoc.data().status !== 'available') {
-           await saveAppState(chatId, 'IDLE', {});
-           return await sendMessage(chatId, MESSAGES.seat_not_available.replace('{seatNo}', seatNo).replace('{busID}', busID), "HTML");
+             await saveAppState(chatId, 'IDLE', {});
+             return await sendMessage(chatId, MESSAGES.seat_not_available.replace('{seatNo}', seatNo).replace('{busID}', busID), "HTML");
     }
 
     const busInfo = await getBusInfo(busID);
@@ -1714,6 +1793,7 @@ async function handleManagerInput(chatId, text, state) {
     const timeRegex = /^\d{2}:\d{2}$/;
     const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
     const phoneRegex = /^\d{10}$/;
+    const urlRegex = /^(http|https):\/\/[^ "]+$/; // Basic URL check
     const validLayouts = ['seater', 'sleeper', 'both'];
     const validSeatTypes = ['sleeper upper', 'sleeper lower', 'seater'];
 
@@ -1764,7 +1844,7 @@ async function handleManagerInput(chatId, text, state) {
                 // Response is handled inside handleTrackingAction, so return early
                 return;
 
-            // --- EXISTING FLOW CASES ---
+            // --- BUS CREATION FLOW (UPDATED) ---
 
             case 'MANAGER_ADD_BUS_NUMBER':
                 data.busNumber = text.toUpperCase().replace(/[^A-Z0-9\s-]/g, '');
@@ -1864,15 +1944,45 @@ async function handleManagerInput(chatId, text, state) {
                 data.managerPhone = text.replace(/[^0-9]/g, '');
                 if (!data.managerPhone.match(phoneRegex)) return await sendMessage(chatId, "❌ Invalid Phone Number. Enter a 10-digit number:", "HTML");
 
-                const uniqueBusId = `BUS${Date.now().toString().slice(-6)}`;
-                data.uniqueBusId = uniqueBusId;
-                data.boardingPoints = [];
+                // Initialize images array and start image upload flow
+                data.images = [];
+                data.imageIndex = 1;
+                data.uniqueBusId = `BUS${Date.now().toString().slice(-6)}`;
 
-                nextState = 'MANAGER_ADD_BUS_BOARDING_POINTS_INIT';
-                response = MESSAGES.manager_add_bus_boarding_init;
-                await saveAppState(chatId, nextState, data);
-                await sendMessage(chatId, response, "HTML");
-                return;
+                nextState = 'MANAGER_ADD_BUS_IMAGE_1';
+                response = MESSAGES.manager_add_bus_image_prompt.replace('{index}', 1).replace('{current}', 1).replace('{total}', 3);
+                break;
+
+            // --- NEW: BUS IMAGE UPLOAD FLOW ---
+
+            case 'MANAGER_ADD_BUS_IMAGE_1':
+            case 'MANAGER_ADD_BUS_IMAGE_2':
+            case 'MANAGER_ADD_BUS_IMAGE_3':
+                data.imageIndex = parseInt(state.state.slice(-1));
+
+                if (textLower !== 'skip') {
+                    if (!text.match(urlRegex)) {
+                        // Keep current state, prompt again
+                        response = `❌ Invalid URL format for image ${data.imageIndex}. Please enter a valid URL or send **SKIP**:\n<pre>https://example.com/bus.jpg</pre>`;
+                        nextState = state.state;
+                        break;
+                    }
+                    data.images.push(text.trim());
+                }
+
+                data.imageIndex++;
+                if (data.imageIndex <= 3) {
+                    nextState = `MANAGER_ADD_BUS_IMAGE_${data.imageIndex}`;
+                    response = MESSAGES.manager_add_bus_image_prompt.replace('{index}', data.imageIndex).replace('{current}', data.imageIndex).replace('{total}', 3);
+                } else {
+                    // Move to final step: Boarding Points
+                    data.boardingPoints = [];
+                    nextState = 'MANAGER_ADD_BUS_BOARDING_POINTS_INIT';
+                    response = MESSAGES.manager_add_bus_boarding_init;
+                }
+                break;
+
+            // --- BOARDING POINTS (FINAL STEP) ---
 
             case 'MANAGER_ADD_BUS_BOARDING_POINTS_INIT':
             case 'MANAGER_ADD_BUS_BOARDING_POINTS_INPUT':
@@ -1880,8 +1990,11 @@ async function handleManagerInput(chatId, text, state) {
 
                 if (text.toUpperCase() === 'DONE' || data.boardingPoints.length >= 5) {
 
-                    if (data.boardingPoints.length === 0) {
-                        await sendMessage(chatId, "⚠️ No boarding points added. Proceeding without them.");
+                    if (data.boardingPoints.length === 0 && text.toUpperCase() !== 'DONE') {
+                         // Only proceed if user manually typed DONE or is forced after 5
+                         nextState = state.state;
+                         response = "❌ You must add at least one boarding point or send 'DONE' to skip this step.";
+                         break;
                     } else if (data.boardingPoints.length >= 5 && text.toUpperCase() !== 'DONE') {
                          await sendMessage(chatId, "⚠️ Max 5 boarding points reached. Proceeding to save.");
                     }
@@ -1913,6 +2026,7 @@ async function handleManagerInput(chatId, text, state) {
                         bus_type: data.busLayout,
                         seat_configuration: data.seatsToConfigure,
                         boarding_points: data.boardingPoints,
+                        images: data.images, // NEW: Save image URLs
                         total_seats: 40,
                         rating: 5.0,
                         status: 'scheduled',
@@ -2422,7 +2536,7 @@ async function handleShowManifest(chatId, text) {
 
         const bookingSnapshot = await db.collection('bookings')
             .where('busID', '==', busID)
-            .where('status', '==', 'confirmed')
+            .where('status', 'in', ['confirmed', 'boarded'])
             .get();
 
         if (bookingSnapshot.empty) {
@@ -2850,6 +2964,12 @@ async function handleUserMessage(chatId, text, user) {
             await handleProfileUpdate(chatId, text);
             return;
         }
+        
+        // Handle bus deletion confirmation (NEW)
+        if (state.state === 'AWAITING_BUS_DELETE_CONFIRMATION' && textLower === `yes delete ${state.data.busID.toLowerCase()}`) {
+            await handleDeleteBus(chatId, text); // Pass text to execute deletion
+            return;
+        }
 
         // Handle in-flow commands
         if (state.state === 'AWAITING_BOARDING_POINT' || state.state === 'AWAITING_DESTINATION') { // NEW STATE ROUTING
@@ -2927,6 +3047,9 @@ async function handleUserMessage(chatId, text, user) {
     }
     else if (textLower.startsWith('show aadhar api config')) { // MANAGER VIEW CONFIG
         await handleShowAadharApiConfig(chatId);
+    }
+    else if (textLower.startsWith('delete bus')) { // MANAGER DELETE BUS (NEW)
+        await handleDeleteBus(chatId, text);
     }
     // GENERAL COMMANDS
     else if (textLower.startsWith('my profile details')) {
