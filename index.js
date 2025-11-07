@@ -194,6 +194,11 @@ Time: {dateTime}
     owner_staff_revoked: "✅ Chat ID <b>{chatId}</b> role revoked (set to user).",
     owner_invalid_format: "❌ Invalid format. Use: <pre>assign manager CHAT_ID</pre> or <pre>revoke manager CHAT_ID</pre>",
     owner_permission_denied: "❌ Only Bus Owners can manage staff roles.",
+    bus_edit_success: "✅ Bus <b>{busID}</b> updated. Field: <b>{field}</b> set to <b>{value}</b>.",
+    bus_point_add_success: "✅ Boarding point <b>{point}</b> added to Bus <b>{busID}</b> at {time}.",
+    bus_point_remove_success: "✅ Boarding point <b>{point}</b> removed from Bus <b>{busID}</b>.",
+    bus_point_not_found: "❌ Boarding point <b>{point}</b> not found on Bus <b>{busID}</b>.",
+
 
     // Revenue & Audit
     revenue_report: "💵 <b>Revenue Report for {date}</b>\n\nTotal Confirmed Bookings: {count}\nTotal Revenue (Gross): <b>₹{totalRevenue} INR</b>",
@@ -745,6 +750,51 @@ async function sendFareAlertNotifications() {
     }
 }
 
+/* --------------------- OSP Inventory Sync Cron Logic (NEW) ---------------------- */
+
+/**
+ * Mock periodic check of an external OSP API to sync inventory status.
+ */
+async function runOspInventorySync() {
+    const db = getFirebaseDb();
+    let syncCount = 0;
+    // 1. Find all buses with an OSP endpoint configured
+    const busesToSync = await db.collection('buses').where('osp_api_endpoint', '!=', null).get();
+
+    for (const busDoc of busesToSync.docs) {
+        const data = busDoc.data();
+        const busID = data.bus_id;
+        const endpoint = data.osp_api_endpoint;
+
+        // MOCK: In a real scenario, this would call the external API.
+        try {
+            // MOCKING EXTERNAL DATA PULL: Assume external API marks 1A, 1B, 2A, 2B as booked externally
+            // This simulation runs once per execution, enforcing booked status on those seats.
+            const mockExternalBookedSeats = ['1A', '1B', '2A', '2B']; 
+            
+            const batch = db.batch();
+            let updatesCount = 0;
+
+            // Update only the seats that are "available" in our system but are "booked" externally
+            for (const seatNo of mockExternalBookedSeats) {
+                const seatRef = db.collection('seats').doc(`${busID}-${seatNo}`);
+                // Only mark as booked if they exist. U for Unknown/External Gender
+                batch.update(seatRef, { status: 'booked', booking_id: 'OSP_SYNC', gender: 'U' }).catch(() => {}); 
+                updatesCount++;
+            }
+            
+            await batch.commit();
+            console.log(`[OSP SYNC SUCCESS] Bus ${busID}: Synced ${updatesCount} seats from ${endpoint}`);
+            syncCount++;
+
+        } catch (e) {
+            console.error(`[OSP SYNC ERROR] Bus ${busID} failed to sync from ${endpoint}:`, e.message);
+        }
+    }
+    return { syncCount };
+}
+
+
 /* --------------------- Razorpay Webhook Verification ---------------------- */
 
 function verifyRazorpaySignature(payload, signature) {
@@ -1061,6 +1111,170 @@ async function handleSetBusStatus(chatId, text) {
     }
 }
 
+// --- MANAGER/OWNER: EDIT BUS DETAILS (NEW) ---
+
+async function handleEditBus(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, MESSAGES.agent_permission_denied);
+
+    // Matches: Edit bus BUS101 price 950 | Edit bus BUS101 route Pune to Mumbai
+    const match = text.match(/edit bus\s+(BUS\d+)\s+(price|route|status|type)\s+(.+)/i);
+    
+    if (!match) return await sendMessage(chatId, "❌ Invalid format. Use: <pre>Edit bus [BUSID] [FIELD] [VALUE]</pre>\nFields: price, route, status, type.", "HTML");
+
+    const busID = match[1].toUpperCase();
+    const field = match[2].toLowerCase();
+    let value = match[3].trim();
+    let updateKey = '';
+    let updateValue;
+    const db = getFirebaseDb();
+    
+    try {
+        const busRef = db.collection('buses').doc(busID);
+        const busDoc = await busRef.get();
+
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`);
+
+        switch (field) {
+            case 'price':
+                updateKey = 'price';
+                updateValue = parseFloat(value.replace(/[^0-9.]/g, ''));
+                if (isNaN(updateValue) || updateValue <= 0) return await sendMessage(chatId, "❌ Invalid price value.");
+                value = `₹${updateValue.toFixed(2)}`;
+                break;
+            case 'route':
+                updateKey = 'route';
+                updateValue = value;
+                const routeParts = value.split(' to ').map(s => s.trim());
+                if (routeParts.length < 2) return await sendMessage(chatId, "❌ Invalid route format. Use: 'City A to City B'.");
+                await busRef.update({ 'from': routeParts[0], 'to': routeParts[1] });
+                break;
+            case 'status':
+                updateKey = 'status';
+                updateValue = value.toLowerCase();
+                const validStatuses = ['scheduled', 'departed', 'arrived', 'maintenance'];
+                if (!validStatuses.includes(updateValue)) return await sendMessage(chatId, MESSAGES.bus_status_invalid);
+                if (updateValue === 'maintenance' || updateValue === 'arrived') {
+                    await busRef.update({ is_tracking: false });
+                }
+                value = updateValue.toUpperCase();
+                break;
+            case 'type':
+                updateKey = 'bus_type';
+                updateValue = value.toLowerCase();
+                const validTypes = ['seater', 'sleeper', 'both'];
+                if (!validTypes.includes(updateValue)) return await sendMessage(chatId, MESSAGES.manager_invalid_layout);
+                value = updateValue.charAt(0).toUpperCase() + updateValue.slice(1);
+                break;
+            default:
+                return await sendMessage(chatId, "❌ Unknown field to edit.");
+        }
+
+        // Perform the update (if not already handled by the 'route' case)
+        if (updateKey && updateKey !== 'route') {
+            await busRef.update({ [updateKey]: updateValue });
+        }
+        
+        const response = MESSAGES.bus_edit_success
+            .replace('{busID}', busID)
+            .replace('{field}', updateKey)
+            .replace('{value}', value);
+        
+        await sendMessage(chatId, response, "HTML");
+
+    } catch (e) {
+        console.error("Error editing bus:", e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+
+// --- MANAGER/OWNER: MANAGE BOARDING POINTS (NEW) ---
+
+async function handleAddBoardingPoint(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, MESSAGES.agent_permission_denied);
+
+    // Matches: Add point BUS101 Vashi / 21:00
+    const match = text.match(/add point\s+(BUS\d+)\s+([^\/]+)\s*\/\s*(\d{2}:\d{2})/i);
+    if (!match) return await sendMessage(chatId, "❌ Invalid format. Use: <pre>Add point BUS101 [Point Name] / [HH:MM]</pre>", "HTML");
+
+    const busID = match[1].toUpperCase();
+    const pointName = match[2].trim();
+    const time = match[3].trim();
+    const db = getFirebaseDb();
+
+    try {
+        const busRef = db.collection('buses').doc(busID);
+        const busDoc = await busRef.get();
+
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`);
+
+        const currentPoints = busDoc.data().boarding_points || [];
+
+        // Check for duplicates
+        if (currentPoints.some(p => p.name.toLowerCase() === pointName.toLowerCase())) {
+            return await sendMessage(chatId, `⚠️ Point <b>${pointName}</b> already exists for Bus <b>${busID}</b>.`);
+        }
+
+        currentPoints.push({ name: pointName, time: time });
+        
+        await busRef.update({ boarding_points: currentPoints });
+
+        const response = MESSAGES.bus_point_add_success
+            .replace('{busID}', busID)
+            .replace('{point}', pointName)
+            .replace('{time}', time);
+        await sendMessage(chatId, response, "HTML");
+
+    } catch (e) {
+        console.error("Error adding boarding point:", e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+async function handleRemoveBoardingPoint(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, MESSAGES.agent_permission_denied);
+
+    // Matches: Remove point BUS101 Vashi
+    const match = text.match(/remove point\s+(BUS\d+)\s+(.+)/i);
+    if (!match) return await sendMessage(chatId, "❌ Invalid format. Use: <pre>Remove point BUS101 [Point Name]</pre>", "HTML");
+
+    const busID = match[1].toUpperCase();
+    const pointName = match[2].trim();
+    const db = getFirebaseDb();
+
+    try {
+        const busRef = db.collection('buses').doc(busID);
+        const busDoc = await busRef.get();
+
+        if (!busDoc.exists) return await sendMessage(chatId, `❌ Bus ID <b>${busID}</b> not found.`);
+
+        let currentPoints = busDoc.data().boarding_points || [];
+        const initialLength = currentPoints.length;
+
+        // Filter out the point to be removed
+        currentPoints = currentPoints.filter(p => p.name.toLowerCase() !== pointName.toLowerCase());
+
+        if (currentPoints.length === initialLength) {
+            return await sendMessage(chatId, MESSAGES.bus_point_not_found.replace('{busID}', busID).replace('{point}', pointName), "HTML");
+        }
+        
+        await busRef.update({ boarding_points: currentPoints });
+
+        const response = MESSAGES.bus_point_remove_success
+            .replace('{busID}', busID)
+            .replace('{point}', pointName);
+        await sendMessage(chatId, response, "HTML");
+
+    } catch (e) {
+        console.error("Error removing boarding point:", e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
+
 // --- MANAGER: CHECK-IN & SEAT RELEASE ---
 
 async function handleCheckIn(chatId, text) {
@@ -1313,7 +1527,7 @@ async function handleShowMyTrips(chatId) {
     }
 }
 
-// --- showSearchResults function (UPDATED FOR IMAGE DISPLAY) ---
+// --- showSearchResults function (UPDATED FOR DYNAMIC PRICING) ---
 async function showSearchResults(chatId, from, to, date) {
     try {
         const db = getFirebaseDb();
@@ -1340,6 +1554,8 @@ async function showSearchResults(chatId, from, to, date) {
         if (buses.length === 0) return await sendMessage(chatId, MESSAGES.no_buses, "HTML");
 
         let response = MESSAGES.search_results.replace('{from}', from).replace('{to}', to).replace('{date}', date);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
 
         for (const bus of buses) {
             // Check available seats dynamically
@@ -1351,10 +1567,29 @@ async function showSearchResults(chatId, from, to, date) {
                 // Display link to the first image
                 imageLink = MESSAGES.bus_image_link.replace('{imageUrl}', bus.images[0]).replace('{index}', '1');
             }
+            
+            // --- DYNAMIC PRICING LOGIC ---
+            const departureDate = new Date(bus.date);
+            departureDate.setHours(0, 0, 0, 0);
+
+            let finalPrice = bus.price;
+            let priceNote = '';
+
+            if (departureDate.getTime() === today.getTime()) {
+                // 10% premium for same-day booking
+                finalPrice = bus.price * 1.10;
+                priceNote = ' (10% premium)';
+            } else if (departureDate.getTime() > today.getTime() + (24 * 60 * 60 * 1000) * 7) {
+                // 5% discount for booking more than 7 days ahead
+                finalPrice = bus.price * 0.95;
+                priceNote = ' (5% early-bird)';
+            }
+            // --- END DYNAMIC PRICING LOGIC ---
+
 
             response += `<b>${bus.busID}</b> - ${bus.owner}\n`;
             response += `🕒 ${bus.time}\n`;
-            response += `💰 ₹${bus.price} • ${bus.busType} • ⭐ ${bus.rating}\n`;
+            response += `💰 ₹${finalPrice.toFixed(2)}${priceNote} • ${bus.busType} • ⭐ ${bus.rating}\n`;
             response += `💺 ${availableSeats} seats available\n`;
             if (imageLink) response += `${imageLink}\n`; // Add image link here
             response += `📋 "Show seats ${bus.busID}" to view seats\n\n`;
@@ -1541,7 +1776,7 @@ async function handleSeatSelection(chatId, text) {
 }
 // --- END handleSeatSelection ---
 
-// --- NEW DEFINITION: handleBookSeatCallback (for interactive booking) ---
+// --- NEW DEFINITION: handleBookSeatCallback (for interactive booking) (UPDATED FOR DYNAMIC PRICE) ---
 async function handleBookSeatCallback(chatId, callbackData) {
     // Expected format: cb_book_seat_BUSID_SEATNO
     const parts = callbackData.split('_');
@@ -1562,13 +1797,30 @@ async function handleBookSeatCallback(chatId, callbackData) {
     const busInfo = await getBusInfo(busID);
     if (!busInfo) return await sendMessage(chatId, "❌ Bus details unavailable for booking.");
 
+    // --- DYNAMIC PRICING CALCULATION ---
+    const basePrice = busInfo.price; 
+    let finalPrice = basePrice;
+    const departureDate = new Date(busInfo.date);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    departureDate.setHours(0, 0, 0, 0);
+
+    if (departureDate.getTime() === today.getTime()) {
+        finalPrice = basePrice * 1.10; // 10% premium
+    } else if (departureDate.getTime() > today.getTime() + (24 * 60 * 60 * 1000) * 7) {
+        finalPrice = basePrice * 0.95; // 5% discount
+    }
+    // --- END DYNAMIC PRICING CALCULATION ---
+
+
     const bookingData = {
         busID,
         seatNo,
         busTo: busInfo.to,
         destination: null,
-        boardingPoint: null, // NEW FIELD INITIALIZED
+        boardingPoint: null, 
         passengers: [],
+        finalPrice: parseFloat(finalPrice.toFixed(2)) // Store calculated price
     };
 
     await saveAppState(chatId, 'AWAITING_BOARDING_POINT', bookingData); // NEW STATE
@@ -2911,14 +3163,16 @@ async function handleAddPassengerCallback(chatId) {
     await sendMessage(chatId, MESSAGES.feature_wip + " Multi-seat selection coming soon! Please complete your current booking.", "HTML");
 }
 
-// 13. createPaymentOrder (UPDATED to store Agent ID)
+// 13. createPaymentOrder (UPDATED to use DYNAMIC PRICE from state)
 async function createPaymentOrder(chatId, bookingData) {
     try {
         const db = getFirebaseDb();
-        const busInfo = await getBusInfo(bookingData.busID);
-        if (!busInfo) return await sendMessage(chatId, "❌ Bus not found for payment.");
+        
+        // Use finalPrice from state data, which includes dynamic adjustments.
+        const pricePerSeat = bookingData.finalPrice || 0; 
+        if (pricePerSeat === 0) return await sendMessage(chatId, "❌ Booking price information is missing. Please restart booking.", "HTML");
 
-        const amount = busInfo.price * bookingData.passengers.length * 100; // Amount in paise
+        const amount = pricePerSeat * bookingData.passengers.length * 100; // Amount in paise
 
         // Get Agent ID if the current user is an Agent
         const agentId = await getAgentIdByChatId(chatId);
@@ -3342,6 +3596,15 @@ async function handleUserMessage(chatId, text, user) {
     else if (textLower.startsWith('delete bus')) { // MANAGER DELETE BUS (NEW)
         await handleDeleteBus(chatId, text);
     }
+    else if (textLower.startsWith('edit bus')) { // MANAGER EDIT BUS (NEW)
+        await handleEditBus(chatId, text);
+    }
+    else if (textLower.startsWith('add point')) { // MANAGER ADD BOARDING POINT (NEW)
+        await handleAddBoardingPoint(chatId, text);
+    }
+    else if (textLower.startsWith('remove point')) { // MANAGER REMOVE BOARDING POINT (NEW)
+        await handleRemoveBoardingPoint(chatId, text);
+    }
     // GENERAL COMMANDS
     else if (textLower.startsWith('my profile details')) {
         // This is handled in the state check block above for new users,
@@ -3572,3 +3835,4 @@ module.exports = app;
 // Export cron functions so Vercel can run them
 module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
 module.exports.sendFareAlertNotifications = sendFareAlertNotifications;
+module.exports.runOspInventorySync = runOspInventorySync;
