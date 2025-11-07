@@ -3,7 +3,7 @@ const express = require('express');
 const axios = require('axios');
 const admin = require('firebase-admin');
 const Razorpay = require('razorpay');
-const crypto = require('crypto');
+const crypto = require('crypto'); // Used for password hashing
 
 // --- Configuration ---
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
@@ -33,6 +33,30 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_KEY_SECRET, // Reads from environment variable
 });
 
+/* --- AGENT HELPER FUNCTIONS --- */
+
+/**
+ * Mocks secure password hashing. In production, this would use bcrypt.
+ */
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password).digest('hex');
+}
+
+/**
+ * Checks if the Telegram user is already linked to an active Agent account.
+ * @param {string} chatId
+ * @returns {Promise<string|null>} The agentId if found, null otherwise.
+ */
+async function getAgentIdByChatId(chatId) {
+    const db = getFirebaseDb();
+    const userDoc = await db.collection('users').doc(String(chatId)).get();
+    if (userDoc.exists && userDoc.data().role === 'agent') {
+        return userDoc.data().agent_id || null;
+    }
+    return null;
+}
+
+
 // --- MESSAGES (Updated to use HTML tags for robustness) ---
 const MESSAGES = {
     help: `🆘 <b>GoRoute Help Center</b>
@@ -56,6 +80,23 @@ Select an option from the menu below to get started. You can also type commands 
     profile_updated: "✅ <b>Profile Updated!</b> Your details have been saved.",
     profile_update_error: "❌ <b>Error!</b> Please use the correct format:\n<pre>my profile details [Name] / [Aadhar Number] / [Phone Number]</pre>",
     user_not_found: "❌ User not found. Please send /start to register.",
+    agent_pending_login: "✅ Role set to Agent. Please log in using your credentials: <pre>/agentlogin AGENT_ID PASSWORD</pre>",
+
+
+    // Agent Management & Login (NEW)
+    agent_permission_denied: "❌ You do not have permission to manage agents.",
+    manager_agent_prompt: "👤 <b>Agent Management:</b> Please enter the Agent's ID to create/manage (e.g., <pre>AGNT1001</pre> or <pre>create agent AGNT1001 / Agent Name</pre>):",
+    agent_creation_name: "📝 Enter the Agent's Full Name (e.g., <pre>Ravi Sharma</pre>):",
+    agent_creation_pass: "🔒 Enter the temporary <b>Password</b> for this Agent (e.g., <pre>temp123</pre>):",
+    agent_creation_success: "✅ Agent <b>{agentId}</b> created successfully. Advise the agent to log in using <pre>/agentlogin {agentId} [PASSWORD]</pre>",
+    agent_login_invalid_format: "❌ Invalid login format. Use: <pre>/agentlogin AGENT_ID PASSWORD</pre>",
+    agent_credentials_invalid: "❌ Invalid Agent ID or Password.",
+    agent_login_success: "🎉 Welcome, Agent {agentName}! Your Telegram account is now linked to Agent ID <b>{agentId}</b>. You can now book tickets.",
+    agent_already_linked: "⚠️ Your Telegram account is already linked to Agent ID <b>{agentId}</b>.",
+    agent_report_header: "📈 <b>Agent Booking Report ({date})</b>\n\nTotal Confirmed Bookings: {totalCount}\nTotal Revenue: <b>₹{totalRevenue} INR</b>\n\n--- Bookings by Agent ---\n{agentList}",
+    agent_report_entry: " • <b>{agentName}</b> ({agentId}): {count} Bookings (₹{revenue} Gross)",
+    no_agent_bookings: "📭 No confirmed bookings found by any agent for this period.",
+
 
     // Phone Update
     update_phone_prompt: "📞 <b>Update Phone:</b> Please enter your new 10-digit phone number now.",
@@ -92,6 +133,7 @@ Passenger Drop-off: <b>{destination}</b>
 👤 <b>Passenger Info (Primary)</b>
 Name: {name}
 Phone: {phone}
+Booked By: {bookedBy}
 
 💰 <b>Transaction Details</b>
 Order ID: {orderId}
@@ -195,7 +237,7 @@ Time: {dateTime}
     manager_delete_bus_success: "🗑️ Bus <b>{busID}</b>, all its seats, and bookings have been permanently deleted.",
 
     // Manager Notifications (MISSING MESSAGES - ADDED HERE)
-    manager_notification_booking: "🔔 <b>NEW BOOKING ALERT ({busID})</b>\n\nSeats: {seats}\nPassenger: {passengerName}\nTime: {dateTime}\n\nUse <pre>show manifest {busID}</pre> to view the full list.",
+    manager_notification_booking: "🔔 <b>NEW BOOKING ALERT ({busID})</b>\n\nSeats: {seats}\nPassenger: {passengerName}\nBooked By: {bookedBy}\nTime: {dateTime}\n\nUse <pre>show manifest {busID}</pre> to view the full list.",
     manager_notification_cancellation: "🗑️ <b>CANCELLATION ALERT ({busID})</b>\n\nBooking ID: {bookingId}\nSeats: {seats}\nTime: {dateTime}\n\nSeats have been automatically released.",
 
     // General
@@ -409,10 +451,12 @@ async function sendManagerNotification(busID, type, details) {
         let notificationText = '';
         if (type === 'BOOKING') {
             const seatList = details.seats.map(s => s.seatNo).join(', ');
+            const bookedBy = details.agentId ? `Agent ${details.agentId}` : 'Direct Customer';
             notificationText = MESSAGES.manager_notification_booking
                 .replace('{busID}', busID)
                 .replace('{seats}', seatList)
                 .replace('{passengerName}', details.passengerName || 'A Passenger')
+                .replace('{bookedBy}', bookedBy) // NEW
                 .replace('{dateTime}', now);
         } else if (type === 'CANCELLATION') {
             const seatsList = details.seats.join(', ');
@@ -740,15 +784,19 @@ async function sendHelpMessage(chatId) {
         if (userRole === 'owner') {
             baseButtons.push(
                 [{ text: "👑 Manage Staff", callback_data: "cb_owner_manage_staff" }],
+                [{ text: "👤 Manage Agents", callback_data: "cb_manage_agents" }], // NEW BUTTON
                 [{ text: "💵 Show Revenue", callback_data: "cb_show_revenue_prompt" }],
+                [{ text: "📈 Agent Report", callback_data: "cb_agent_report_prompt" }], // NEW BUTTON
                 [{ text: "⚠️ Set Bus Status", callback_data: "cb_set_bus_status_prompt" }],
                 [{ text: "🔒 Setup Aadhar API", callback_data: "cb_aadhar_api_setup" }],
-                [{ text: "🔔 View Fare Alerts", callback_data: "cb_show_fare_alerts" }] // ADDED: New Audit Feature
+                [{ text: "🔔 View Fare Alerts", callback_data: "cb_show_fare_alerts" }]
             );
         }
 
         if (userRole === 'manager' || userRole === 'owner') {
             baseButtons.push(
+                [{ text: "👤 Manage Agents", callback_data: "cb_manage_agents" }], // NEW BUTTON
+                [{ text: "📈 Agent Report", callback_data: "cb_agent_report_prompt" }], // NEW BUTTON
                 [{ text: "➕ Add New Bus", callback_data: "cb_add_bus_manager" }],
                 [{ text: "🚌 Show My Trips", callback_data: "cb_show_my_trips" }],
                 [{ text: "📍 Start Route Tracking", callback_data: "cb_start_route_tracking_prompt" }],
@@ -758,7 +806,8 @@ async function sendHelpMessage(chatId) {
             );
         }
 
-        if (userRole === 'user' || userRole === 'unregistered') {
+        // Agents get the same booking flow as Users, but their bookings are tagged.
+        if (userRole === 'user' || userRole === 'agent' || userRole === 'unregistered') {
              baseButtons.push(
                  [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
                  [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
@@ -786,10 +835,6 @@ async function sendHelpMessage(chatId) {
 // MODIFIED: Removes button suggestions and relies entirely on user text input
 async function handleStartSearch(chatId) {
     try {
-        // --- MODIFIED: REMOVED suggested cities buttons ---
-        // The user must now type the city name.
-         
-        // Clear keyboard in the prompt to encourage text input, passing null.
         await saveAppState(chatId, 'AWAITING_SEARCH_FROM', { step: 1 });
         await sendMessage(chatId, MESSAGES.search_from, "HTML", null); // Passing null for keyboard
 
@@ -846,6 +891,88 @@ async function handleShowRevenue(chatId, text) {
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
+
+// --- OWNER/MANAGER: AGENT BOOKING REPORT (NEW) ---
+
+async function handleAgentReport(chatId, text) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'owner' && userRole !== 'manager') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
+
+    const match = text.match(/agent report\s+(\d{4}-\d{2}-\d{2})/i);
+    const targetDate = match ? match[1] : new Date().toISOString().split('T')[0];
+
+    try {
+        const db = getFirebaseDb();
+        const snapshot = await db.collection('bookings')
+            .where('status', '==', 'confirmed')
+            .get();
+
+        const report = {};
+        let totalRevenue = 0;
+        let totalCount = 0;
+
+        snapshot.forEach(doc => {
+            const data = doc.data();
+            const bookingDate = data.created_at ? data.created_at.toDate().toISOString().split('T')[0] : null;
+
+            if (bookingDate === targetDate) {
+                const agentId = data.agent_id || 'DIRECT';
+                const revenue = data.total_paid || 0;
+
+                if (!report[agentId]) {
+                    report[agentId] = { count: 0, revenue: 0, name: 'Direct Customer' };
+                }
+
+                report[agentId].count += 1;
+                report[agentId].revenue += revenue;
+                totalRevenue += revenue;
+                totalCount += 1;
+            }
+        });
+
+        if (totalCount === 0) {
+            return await sendMessage(chatId, MESSAGES.no_agent_bookings);
+        }
+
+        // Get agent names from the agents collection
+        const agentIds = Object.keys(report).filter(id => id !== 'DIRECT');
+        const agentNames = {};
+
+        if (agentIds.length > 0) {
+            for (const agentId of agentIds) {
+                const agentDoc = await db.collection('agents').doc(agentId).get();
+                if (agentDoc.exists) {
+                    agentNames[agentId] = agentDoc.data().name;
+                }
+            }
+        }
+
+        let agentList = '';
+        for (const agentId in report) {
+            const data = report[agentId];
+            const name = agentId === 'DIRECT' ? 'Direct Customer' : agentNames[agentId] || 'Unknown Agent';
+            agentList += MESSAGES.agent_report_entry
+                .replace('{agentName}', name)
+                .replace('{agentId}', agentId)
+                .replace('{count}', data.count)
+                .replace('{revenue}', (data.revenue / 100).toFixed(2));
+        }
+
+        const response = MESSAGES.agent_report_header
+            .replace('{date}', targetDate)
+            .replace('{totalCount}', totalCount)
+            .replace('{totalRevenue}', (totalRevenue / 100).toFixed(2))
+            .replace('{agentList}', agentList);
+
+        await sendMessage(chatId, response, "HTML");
+        return;
+
+    } catch (e) {
+        console.error("Error generating agent report:", e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
 
 // --- MANAGER/OWNER: DELETE BUS (NEW) ---
 async function handleDeleteBus(chatId, text) {
@@ -1078,8 +1205,8 @@ async function handleShowFareAlerts(chatId) {
             const alert = doc.data();
             const date = alert.created_at ? alert.created_at.toDate().toLocaleString('en-IN') : 'N/A';
             alertList += `${index + 1}. <b>${alert.from}</b> → <b>${alert.to}</b> @ ${alert.time}\n`;
-            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
-            alertList += `  Set On: ${date}\n\n`;
+            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
+            alertList += `  Set On: ${date}\n\n`;
         });
 
         alertList += "💡 To delete an alert, notify the user or manage the record in the database.";
@@ -1104,14 +1231,20 @@ async function handleUserProfile(chatId) {
             const user = doc.data();
             const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
 
+            let agentInfo = '';
+            if (user.role === 'agent' && user.agent_id) {
+                agentInfo = `\n<b>Agent ID:</b> <code>${user.agent_id}</code>`;
+            }
+
             const profileText = `👤 <b>Your Profile</b>\n\n` +
-                                 `<b>Name:</b> ${user.name || 'Not set'}\n` +
-                                 `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
-                                 `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
-                                 `<b>Aadhar:</b> ${user.aadhar || 'Not set'}\n` +
-                                 `<b>Role:</b> ${user.role || 'user'}\n` +
-                                 `<b>Status:</b> ${user.status || 'N/A'}\n` +
-                                 `<b>Member since:</b> ${joinDate}`;
+                                     `<b>Name:</b> ${user.name || 'Not set'}\n` +
+                                     `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
+                                     `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
+                                     `<b>Aadhar:</b> ${user.aadhar || 'Not set'}` +
+                                     agentInfo + // NEW
+                                     `\n<b>Role:</b> ${user.role || 'user'}\n` +
+                                     `<b>Status:</b> ${user.status || 'N/A'}\n` +
+                                     `<b>Member since:</b> ${joinDate}`;
 
             await sendMessage(chatId, profileText, "HTML");
             return; // Explicit return
@@ -1168,7 +1301,7 @@ async function handleShowMyTrips(chatId) {
         buses.forEach(data => {
             const date = data.departure_time.split(' ')[0];
             tripList += `\n• <b>${data.bus_id}</b>: ${data.from} → ${data.to}\n`;
-            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
+            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
         });
 
         const response = MESSAGES.manager_list_trips.replace('{tripList}', tripList);
@@ -1236,8 +1369,7 @@ async function showSearchResults(chatId, from, to, date) {
 // --- END showSearchResults ---
 
 
-// --- handleSearchInputCallback definition ---
-// MODIFIED: Removes city selection flow, only handles date buttons
+// --- handleSearchInputCallback function (MODIFIED) ---
 async function handleSearchInputCallback(chatId, callbackData, state) {
     const db = getFirebaseDb();
     let data = state.data;
@@ -1245,45 +1377,8 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
     let response = '';
     let keyboard = null;
 
-    // Handle initial Source selection (step 1)
-    if (state.state === 'AWAITING_SEARCH_FROM') {
-        // This branch should ideally be unreachable since city buttons are explicitly removed from the prompt,
-        // but it handles old/cached button clicks for robustness.
-        data.from = callbackData.replace('cb_search_from_', '');
-
-        const snapshot = await db.collection('buses').where('from', '==', data.from).get();
-        const availableDestinations = new Set();
-        snapshot.forEach(doc => availableDestinations.add(doc.data().to));
-
-        const dests = Array.from(availableDestinations).sort();
-
-        if (dests.length === 0) {
-            await saveAppState(chatId, 'IDLE', {});
-            return await sendMessage(chatId, `❌ No destinations currently scheduled from <b>${data.from}</b>.`, "HTML");
-        }
-        
-        // Ensure no destination buttons are generated here
-        keyboard = null;
-        nextState = 'AWAITING_SEARCH_TO';
-        response = MESSAGES.search_to;
-
-    // Handle Destination selection (step 2)
-    } else if (state.state === 'AWAITING_SEARCH_TO') {
-        // This branch should also be unreachable via buttons in the new flow.
-        data.to = callbackData.replace('cb_search_to_', '');
-
-        keyboard = {
-            inline_keyboard: [
-                [{ text: "📅 Today", callback_data: `cb_search_date_today` }],
-                [{ text: "➡️ Tomorrow", callback_data: `cb_search_date_tomorrow` }],
-                [{ text: "🗓️ Pick Specific Date (WIP)", callback_data: `cb_search_date_specific` }],
-            ]
-        };
-        nextState = 'AWAITING_SEARCH_DATE';
-        response = MESSAGES.search_date;
-
     // Handle Date selection (step 3 - ONLY ACTIVE BUTTON FLOW)
-    } else if (state.state === 'AWAITING_SEARCH_DATE') {
+    if (state.state === 'AWAITING_SEARCH_DATE') {
         data.dateType = callbackData.replace('cb_search_date_', '');
         let targetDate;
 
@@ -1304,8 +1399,9 @@ async function handleSearchInputCallback(chatId, callbackData, state) {
         return await showSearchResults(chatId, data.from, data.to, data.date);
     }
 
-    await saveAppState(chatId, nextState, data);
-    await sendMessage(chatId, response, "HTML", keyboard);
+    // Fallback for unexpected old state buttons
+    await saveAppState(chatId, 'IDLE', {});
+    await sendMessage(chatId, "❌ Invalid search step. Please restart your search using /book.", "HTML");
 }
 // --- END handleSearchInputCallback ---
 
@@ -1783,6 +1879,126 @@ async function handleManagerAddBus(chatId) {
 }
 // --- END handleManagerAddBus ---
 
+/* --- AGENT MANAGEMENT FLOW (NEW) --- */
+
+async function handleAgentCreationFlow(chatId) {
+    const userRole = await getUserRole(chatId);
+    if (userRole !== 'manager' && userRole !== 'owner') {
+        return await sendMessage(chatId, MESSAGES.agent_permission_denied);
+    }
+    await saveAppState(chatId, 'MANAGER_ADD_AGENT_ID', {});
+    await sendMessage(chatId, MESSAGES.manager_agent_prompt, "HTML");
+}
+
+async function handleAgentCreationInput(chatId, text, state) {
+    const db = getFirebaseDb();
+    const data = state.data;
+    let nextState = '';
+    let response = '';
+
+    try {
+        switch (state.state) {
+            case 'MANAGER_ADD_AGENT_ID':
+                const createMatch = text.match(/create agent\s+([A-Z0-9]+)\s*\/\s*(.+)/i);
+                if (createMatch) {
+                    data.agentId = createMatch[1].toUpperCase();
+                    data.agentName = createMatch[2].trim();
+                    const agentDoc = await db.collection('agents').doc(data.agentId).get();
+                    if (agentDoc.exists) return await sendMessage(chatId, `❌ Agent ID <b>${data.agentId}</b> already exists. Please choose a new ID.`, "HTML");
+
+                    nextState = 'MANAGER_ADD_AGENT_PASS';
+                    response = MESSAGES.agent_creation_pass;
+                    break;
+
+                } else {
+                    return await sendMessage(chatId, "❌ Invalid format. Use: <pre>create agent AGNT1001 / Agent Name</pre>", "HTML");
+                }
+
+            case 'MANAGER_ADD_AGENT_PASS':
+                const password = text.trim();
+                if (password.length < 5) return await sendMessage(chatId, "❌ Password must be at least 5 characters long. Try again:", "HTML");
+
+                // Save Agent
+                await db.collection('agents').doc(data.agentId).set({
+                    agent_id: data.agentId,
+                    name: data.agentName,
+                    password_hash: hashPassword(password),
+                    manager_chat_id: String(chatId),
+                    created_at: admin.firestore.FieldValue.serverTimestamp(),
+                    chat_id: null // Unlinked by default
+                });
+
+                await saveAppState(chatId, 'IDLE', {});
+                response = MESSAGES.agent_creation_success
+                    .replace('{agentId}', data.agentId)
+                    .replace('{PASSWORD}', password); // Show temp password to manager only
+                await sendMessage(chatId, response, "HTML");
+                return; // Early return
+
+        }
+
+        await saveAppState(chatId, nextState, data);
+        await sendMessage(chatId, response, "HTML");
+
+    } catch (error) {
+        console.error("Agent Creation Error:", error.message);
+        await saveAppState(chatId, 'IDLE', {});
+        await sendMessage(chatId, MESSAGES.db_error + " (Agent creation failed.)");
+    }
+}
+
+async function handleAgentLoginFlow(chatId, text) {
+    const db = getFirebaseDb();
+    const userRole = await getUserRole(chatId);
+
+    // If already an agent, confirm it and exit
+    if (userRole === 'agent') {
+        const agentId = await getAgentIdByChatId(chatId);
+        return await sendMessage(chatId, MESSAGES.agent_already_linked.replace('{agentId}', agentId), "HTML");
+    }
+
+    const match = text.match(/\/agentlogin\s+([A-Z0-9]+)\s+(.+)/i);
+    if (!match) return await sendMessage(chatId, MESSAGES.agent_login_invalid_format, "HTML");
+
+    const agentId = match[1].toUpperCase();
+    const password = match[2].trim();
+    const passwordHash = hashPassword(password);
+
+    try {
+        const agentDoc = await db.collection('agents').doc(agentId).get();
+
+        if (!agentDoc.exists || agentDoc.data().password_hash !== passwordHash) {
+            return await sendMessage(chatId, MESSAGES.agent_credentials_invalid);
+        }
+
+        const agentData = agentDoc.data();
+
+        // 1. Link the Agent account to this Telegram chat ID
+        await agentDoc.ref.update({ chat_id: String(chatId) });
+
+        // 2. Update the Telegram user's role and link the agent ID
+        const userRef = db.collection('users').doc(String(chatId));
+        await userRef.update({
+            role: 'agent',
+            agent_id: agentId,
+            status: 'active'
+        });
+
+        const response = MESSAGES.agent_login_success
+            .replace('{agentName}', agentData.name)
+            .replace('{agentId}', agentId);
+
+        await sendMessage(chatId, response, "HTML");
+        await sendHelpMessage(chatId);
+
+    } catch (e) {
+        console.error("Agent Login Error:", e.message);
+        await sendMessage(chatId, MESSAGES.db_error + " (Agent login failed.)");
+    }
+}
+
+/* --- END AGENT MANAGEMENT FLOW --- */
+
 
 async function handleManagerInput(chatId, text, state) {
     const db = getFirebaseDb();
@@ -1806,9 +2022,15 @@ async function handleManagerInput(chatId, text, state) {
 
         const textLower = text.toLowerCase().trim(); // Define a safe variable for lowercased checks
 
+        // Route Agent Creation flow
+        if (state.state.startsWith('MANAGER_ADD_AGENT_')) {
+            await handleAgentCreationInput(chatId, text, state);
+            return;
+        }
+
         switch (state.state) {
 
-            // --- NEW TRACKING FLOW ---
+            // --- TRACKING FLOW ---
             case 'MANAGER_TRACKING_BUS_ID':
                 const busMatch = text.match(/(BUS\d+)/i); // Use raw text for matching
                 const busID = busMatch ? busMatch[1].toUpperCase() : null;
@@ -2096,6 +2318,7 @@ async function startUserRegistration(chatId, user) {
                 inline_keyboard: [
                     [{ text: "👤 User (Book Tickets)", callback_data: "cb_register_role_user" }],
                     [{ text: "👨‍💼 Bus Manager (Manage Buses)", callback_data: "cb_register_role_manager" }],
+                    [{ text: "💼 Booking Agent (Book & Track)", callback_data: "cb_register_role_agent_pending" }], // NEW ROLE
                     [{ text: "👑 Bus Owner (Manage Staff)", callback_data: "cb_register_role_owner" }],
                 ]
             };
@@ -2107,27 +2330,41 @@ async function startUserRegistration(chatId, user) {
 }
 // -----------------------------------------------------
 
-// --- handleRoleSelection definition ---
+// --- handleRoleSelection definition (UPDATED FOR AGENT PENDING) ---
 async function handleRoleSelection(chatId, user, callbackData) {
     try {
         const role = callbackData.split('_').pop();
+        let finalRole = role;
+
+        if (role === 'agent_pending') {
+            finalRole = 'agent_pending';
+        } else if (role === 'agent') {
+            // Should not happen if using cb_register_role_agent_pending
+            finalRole = 'user';
+        }
+
         const db = getFirebaseDb();
         const newUser = {
             user_id: 'USER' + Date.now(),
             name: user.first_name + (user.last_name ? ' ' + user.last_name : ''),
             chat_id: String(chatId),
             phone: '', aadhar: '',
-            status: 'pending_details',
-            role: role, lang: 'en',
+            status: finalRole === 'agent_pending' ? 'awaiting_agent_login' : 'pending_details',
+            role: finalRole, lang: 'en',
             join_date: admin.firestore.FieldValue.serverTimestamp()
         };
         await db.collection('users').doc(String(chatId)).set(newUser);
 
+        if (finalRole === 'agent_pending') {
+            await sendMessage(chatId, MESSAGES.agent_pending_login, "HTML");
+            return;
+        }
+
         // --- Set state to AWAITING_PROFILE_DETAILS after role selection ---
-        await saveAppState(chatId, 'AWAITING_PROFILE_DETAILS', { role: role });
+        await saveAppState(chatId, 'AWAITING_PROFILE_DETAILS', { role: finalRole });
         // ------------------------------------------------------------------------
 
-        await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', role), "HTML");
+        await sendMessage(chatId, MESSAGES.registration_started.replace('{role}', finalRole), "HTML");
         return;
     } catch (error) {
         await sendMessage(chatId, MESSAGES.db_error);
@@ -2278,12 +2515,19 @@ async function handleProfileUpdate(chatId, text) {
 
         if (!userDoc.exists) return await startUserRegistration(chatId, { first_name: name.trim() });
 
-        await userRef.update({
+        const updateData = {
             name: name.trim(),
             aadhar: aadhar.trim(),
             phone: phone.trim(),
             status: 'active'
-        });
+        };
+
+        // If the user was in the process of registering, set their role from the pending role
+        if (userDoc.data().role === 'unregistered' || userDoc.data().role === 'user') {
+            updateData.role = 'user'; // Ensure standard user role is set if they weren't pending agent/manager
+        }
+
+        await userRef.update(updateData);
 
         // --- Clear state after successful profile update ---
         await saveAppState(chatId, 'IDLE', {});
@@ -2376,7 +2620,7 @@ async function handlePhoneUpdateInput(chatId, text) {
     }
 }
 
-// 4. handleGetTicket (UPDATED to display boarding point)
+// 4. handleGetTicket (UPDATED to display boarding point and Booked By info)
 async function handleGetTicket(chatId, text) {
     const match = text.match(/get ticket\s+(BOOK\d+)/i);
     if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Get ticket BOOK123456</pre>", "HTML");
@@ -2395,6 +2639,14 @@ async function handleGetTicket(chatId, text) {
         const busInfo = await getBusInfo(booking.busID);
         if (!busInfo) return await sendMessage(chatId, "❌ Bus information is unavailable.");
 
+        // Determine who booked it
+        const agentId = booking.agent_id;
+        let bookedByDisplay = 'Direct Customer';
+        if (agentId) {
+            const agentDoc = await db.collection('agents').doc(agentId).get();
+            bookedByDisplay = agentDoc.exists ? `Agent ${agentDoc.data().name} (${agentId})` : `Agent ${agentId}`;
+        }
+
         // Retrieve new fields
         const passengerDestination = booking.seats[0].booked_to_destination || busInfo.to;
         const boardingPoint = booking.boarding_point || 'N/A';
@@ -2411,6 +2663,7 @@ async function handleGetTicket(chatId, text) {
             .replace('{destination}', passengerDestination)
             .replace('{name}', booking.passengers[0].name)
             .replace('{phone}', booking.phone)
+            .replace('{bookedBy}', bookedByDisplay) // NEW POPULATION
             .replace('{orderId}', booking.razorpay_order_id)
             .replace('{amount}', (booking.total_paid / 100).toFixed(2))
             .replace('{dateTime}', booking.created_at.toDate().toLocaleString('en-IN'));
@@ -2658,7 +2911,7 @@ async function handleAddPassengerCallback(chatId) {
     await sendMessage(chatId, MESSAGES.feature_wip + " Multi-seat selection coming soon! Please complete your current booking.", "HTML");
 }
 
-// 13. createPaymentOrder
+// 13. createPaymentOrder (UPDATED to store Agent ID)
 async function createPaymentOrder(chatId, bookingData) {
     try {
         const db = getFirebaseDb();
@@ -2666,6 +2919,9 @@ async function createPaymentOrder(chatId, bookingData) {
         if (!busInfo) return await sendMessage(chatId, "❌ Bus not found for payment.");
 
         const amount = busInfo.price * bookingData.passengers.length * 100; // Amount in paise
+
+        // Get Agent ID if the current user is an Agent
+        const agentId = await getAgentIdByChatId(chatId);
 
         // 1. Create Razorpay Order
         const order = await razorpay.orders.create({
@@ -2675,6 +2931,7 @@ async function createPaymentOrder(chatId, bookingData) {
             notes: {
                 chatId: String(chatId),
                 busID: bookingData.busID,
+                agentId: agentId || 'DIRECT' // Store agent ID in Razorpay notes
             }
         });
 
@@ -2692,6 +2949,7 @@ async function createPaymentOrder(chatId, bookingData) {
             chat_id: String(chatId),
             busID: bookingData.busID,
             boarding_point: bookingData.boardingPoint, // NEW FIELD ADDED
+            agent_id: agentId || null, // NEW FIELD ADDED
             // Seat object now includes the passenger's drop-off destination
             seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender, booked_to_destination: bookingData.destination })),
             passengers: bookingData.passengers,
@@ -2784,7 +3042,7 @@ async function handlePaymentCancelCallback(chatId) {
     }
 }
 
-// 16. commitFinalBookingBatch (CRITICAL: Used by Webhook and Manual Verification)
+// 16. commitFinalBookingBatch (CRITICAL: Used by Webhook and Manual Verification) (UPDATED for Agent ID)
 async function commitFinalBookingBatch(chatId, bookingData) {
     const db = getFirebaseDb();
     const batch = db.batch();
@@ -2816,7 +3074,7 @@ async function commitFinalBookingBatch(chatId, bookingData) {
         // 3. Delete Payment Session
         batch.delete(db.collection('payment_sessions').doc(orderId));
 
-        // 4. Clear App State (Only if triggered by manual user verification, webhook handles outside of user state)
+        // 4. Clear App State (Only if triggered by manual user verification)
         if (chatId) {
             batch.delete(db.collection('user_state').doc(String(chatId)));
         }
@@ -2828,6 +3086,14 @@ async function commitFinalBookingBatch(chatId, bookingData) {
         const seatsList = bookingData.seats.map(s => s.seatNo).join(', ');
         const passengerDestination = bookingData.seats[0].booked_to_destination || busInfo.to;
         const boardingPoint = bookingData.boarding_point || 'N/A'; // Retrieve new field
+        
+        // Determine who booked it
+        const agentId = bookingData.agent_id;
+        let bookedByDisplay = 'Direct Customer';
+        if (agentId) {
+            const agentDoc = await db.collection('agents').doc(agentId).get();
+            bookedByDisplay = agentDoc.exists ? `Agent ${agentDoc.data().name} (${agentId})` : `Agent ${agentId}`;
+        }
 
 
         const response = MESSAGES.payment_confirmed_ticket
@@ -2842,6 +3108,7 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             .replace('{destination}', passengerDestination)
             .replace('{name}', bookingData.passengers[0].name)
             .replace('{phone}', bookingData.phone)
+            .replace('{bookedBy}', bookedByDisplay) // NEW POPULATION
             .replace('{orderId}', orderId)
             .replace('{amount}', (bookingData.total_paid / 100).toFixed(2))
             .replace('{dateTime}', nowReadable);
@@ -2853,6 +3120,7 @@ async function commitFinalBookingBatch(chatId, bookingData) {
         await sendManagerNotification(bookingData.busID, 'BOOKING', {
             seats: bookingData.seats,
             passengerName: bookingData.passengers[0].name,
+            agentId: agentId, // Pass agent ID to manager notification
             dateTime: nowReadable
         });
 
@@ -2896,14 +3164,22 @@ async function handleBookingInfo(chatId) {
         
         let bookingList = "🎫 <b>Your Recent Bookings:</b>\n\n";
 
-        recentBookings.forEach(booking => {
+        for (const booking of recentBookings) {
             const date = booking.created_at ? booking.created_at.toDate().toLocaleDateString('en-IN') : 'N/A';
             const seats = booking.seats.map(s => s.seatNo).join(', ');
+            
+            let bookedByTag = '';
+            if (booking.agent_id) {
+                const agentDoc = await db.collection('agents').doc(booking.agent_id).get();
+                const agentName = agentDoc.exists ? agentDoc.data().name : booking.agent_id;
+                bookedByTag = ` (by Agent ${agentName})`;
+            }
+
 
             bookingList += `• <b>${booking.id}</b> (${booking.busID})\n`;
-            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
-            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}\n\n`;
-        });
+            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
+            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}${bookedByTag}\n\n`;
+        }
 
         await sendMessage(chatId, bookingList + '💡 Use "Get ticket BOOKID" or "Check status BOOKID".', "HTML");
 
@@ -2949,6 +3225,12 @@ async function handleUserMessage(chatId, text, user) {
         return;
     }
 
+    // --- AGENT LOGIN OVERRIDE ---
+    if (textLower.startsWith('/agentlogin')) {
+        await handleAgentLoginFlow(chatId, text);
+        return;
+    }
+
 
     // --- STATE MANAGEMENT CHECK (Handles sequential input/button click messages) ---
     try {
@@ -2978,6 +3260,8 @@ async function handleUserMessage(chatId, text, user) {
              await handleSearchTextInput(chatId, text, state);
         } else if (state.state.startsWith('AWAITING_PASSENGER')) {
             await handleBookingInput(chatId, text, state);
+        } else if (state.state.startsWith('MANAGER_ADD_AGENT_')) { // NEW AGENT CREATION FLOW
+             await handleAgentCreationInput(chatId, text, state);
         } else if (state.state.startsWith('MANAGER_ADD_BUS') || state.state.startsWith('MANAGER_ADD_SEAT') || state.state.startsWith('MANAGER_TRACKING') || state.state.startsWith('MANAGER_AADHAR_API_SETUP')) {
             // Note: handleManagerInput now handles non-string input defensively.
             await handleManagerInput(chatId, text, state);
@@ -3009,9 +3293,16 @@ async function handleUserMessage(chatId, text, user) {
 
     // --- STANDARD COMMANDS (IDLE state) ---
 
-    // OWNER STAFF COMMANDS
+    // OWNER/MANAGER STAFF COMMANDS
     if (textLower.startsWith('assign manager') || textLower.startsWith('revoke manager')) {
         await handleStaffDelegation(chatId, text);
+    }
+    // OWNER/MANAGER AGENT COMMANDS
+    else if (textLower === 'manage agents') {
+        await handleAgentCreationFlow(chatId);
+    }
+    else if (textLower.startsWith('agent report')) {
+        await handleAgentReport(chatId, text);
     }
     else if (textLower.startsWith('show revenue')) { // OWNER REVENUE REPORT
         await handleShowRevenue(chatId, text);
@@ -3171,6 +3462,10 @@ app.post('/api/webhook', async (req, res) => {
                 const userRole = await getUserRole(chatId);
                 if (userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
                 await sendMessage(chatId, MESSAGES.owner_manage_staff_prompt, "HTML");
+            } else if (callbackData === 'cb_manage_agents') { // NEW AGENT MANAGEMENT CALLBACK
+                await handleAgentCreationFlow(chatId);
+            } else if (callbackData === 'cb_agent_report_prompt') { // NEW AGENT REPORT CALLBACK
+                 await sendMessage(chatId, "📈 Please specify the date for the agent report.\nExample: <pre>Agent report 2025-11-02</pre>", "HTML");
             } else if (callbackData === 'cb_show_my_trips') {
                 await handleShowMyTrips(chatId);
             } else if (callbackData === 'cb_update_phone') {
