@@ -13,11 +13,9 @@ const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 // --- Mock Tracking URL (Conceptual Client Link) ---
 const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app/";
 
-// --- Predefined City List (Used for suggested buttons only) ---
-// Note: This list is now only used for mock data/mock location updates.
-const MAJOR_CITIES = [
-    'Mumbai', 'Kolhapur', 'Goa (Panaji)', 'Bengaluru', 'Hyderabad', 'Nagpur', 'Nashik',
-    'Pune', 'Aurangabad', 'Margao', 'Hubballi'
+// --- Mock City List (Used for mock location updates) ---
+const MOCK_LOCATIONS = [
+    'Mumbai Central', 'Pune Bypass', 'Nagpur Bus Stand', 'Nashik Toll', 'Aurangabad Stop', 'Kolhapur Station'
 ];
 
 // --- Seat Icons Mapping ---
@@ -32,6 +30,16 @@ const razorpay = new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID, // Reads from environment variable
     key_secret: process.env.RAZORPAY_KEY_SECRET, // Reads from environment variable
 });
+
+// --- NEW CANCELLATION CONFIGURATION (Differentiated Feature) ---
+// Refunds are calculated based on time remaining until departure, offering transparent tiers.
+const REFUND_TIERS = {
+    FULL_REFUND_HOURS: 12, // 100% refund (minus fee) if cancelled >= 12h before departure
+    HIGH_REFUND_HOURS: 4,  // 75% refund if cancelled >= 4h but < 12h
+    LOW_REFUND_HOURS: 0,   // 50% refund if cancelled < 4h (but before bus departs)
+    ADMIN_FEE_PERCENT: 1,  // 1% flat admin fee on any successful refund
+};
+
 
 /* --- AGENT HELPER FUNCTIONS --- */
 
@@ -154,7 +162,8 @@ Time: {dateTime}
     booking_details_error: "❌ <b>Error!</b> Please provide details in the format: <pre>[Name] / [Age] / [Aadhar Number]</pre>",
     seat_not_available: "❌ Seat {seatNo} on bus {busID} is already booked or invalid.",
     no_bookings: "📭 You don't have any active bookings.",
-    booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nYour refund will be processed and credited within 6 hours of <i>{dateTime}</i>.",
+    // UPDATED CANCELLATION MESSAGE
+    booking_cancelled: "🗑️ <b>Booking Cancelled</b>\n\nBooking {bookingId} has been cancelled successfully.\n\nRefund Details:\nAmount: <b>₹{refundAmount} INR ({refundPercent}%)</b>\nFee: <b>₹{adminFee} INR</b>\nStatus: Your refund will be processed and credited within 6 hours of <i>{dateTime}</i>.",
 
     // NEW SEARCH MESSAGES (MODIFIED)
     search_from: "🗺️ <b>Travel From:</b> Please type the full name of your city to search:",
@@ -431,6 +440,8 @@ async function getBusInfo(busID) {
             price: data.price,
             from: data.from,
             to: data.to,
+            // Format is YYYY-MM-DD HH:MM
+            departureDateTime: data.departure_time, 
             date: data.departure_time.split(' ')[0],
             time: data.departure_time.split(' ')[1],
             boardingPoints: data.boarding_points || [],
@@ -555,6 +566,50 @@ function parseDurationToMs(durationString) {
 }
 
 /**
+ * Calculates the refund amount based on cancellation time relative to departure time.
+ * @param {string} departureDateTime - Format YYYY-MM-DD HH:MM
+ * @param {number} totalPaidPaise - Total paid amount in paise
+ * @returns {{refundPaise: number, refundPercent: number, adminFeePaise: number}}
+ */
+function calculateRefund(departureDateTime, totalPaidPaise) {
+    // Convert YYYY-MM-DD HH:MM to ISO format for reliable Date parsing
+    const departureTime = new Date(departureDateTime.replace(' ', 'T') + ':00'); 
+    const now = new Date();
+    const timeToDepartureMs = departureTime.getTime() - now.getTime();
+    const timeToDepartureHours = timeToDepartureMs / (1000 * 60 * 60);
+
+    let refundPercent = 0;
+
+    if (timeToDepartureHours >= REFUND_TIERS.FULL_REFUND_HOURS) {
+        refundPercent = 100;
+    } else if (timeToDepartureHours >= REFUND_TIERS.HIGH_REFUND_HOURS) {
+        refundPercent = 75;
+    } else if (timeToDepartureHours > REFUND_TIERS.LOW_REFUND_HOURS) {
+        refundPercent = 50;
+    } else {
+        // Less than 0 hours (already departed) or too close to departure (0 hours tier)
+        refundPercent = 0;
+    }
+
+    const baseRefundPaise = Math.floor(totalPaidPaise * (refundPercent / 100));
+
+    // Calculate Admin Fee only if a refund is due
+    const adminFeePaise = (refundPercent > 0) ? Math.ceil(totalPaidPaise * (REFUND_TIERS.ADMIN_FEE_PERCENT / 100)) : 0;
+
+    const finalRefundPaise = Math.max(0, baseRefundPaise - adminFeePaise);
+    
+    // Calculate the *actual* final refund percentage based on the final amount
+    const actualRefundPercent = Math.floor((finalRefundPaise / totalPaidPaise) * 100);
+
+    return {
+        refundPaise: finalRefundPaise,
+        refundPercent: actualRefundPercent,
+        adminFeePaise: adminFeePaise
+    };
+}
+
+
+/**
  * --- MID-ROUTE RELEASE LOGIC ---
  * Iterates through active seats and checks if a passenger's booked-to-destination
  * matches the bus's last reported location (or a mock stop point).
@@ -618,7 +673,7 @@ async function sendLiveLocationUpdates() {
     const currentTime = new Date();
     const notificationTime = currentTime.toLocaleTimeString('en-IN');
     // NOTE: This list now serves as mock locations AND mock destination names for mid-route release
-    const mockLocation = ['Mumbai', 'Pune', 'Nagpur', 'Nashik', 'Aurangabad', 'Kolhapur'];
+    const mockLocation = MOCK_LOCATIONS;
 
     try {
 
@@ -1407,7 +1462,7 @@ async function handleShowFareAlerts(chatId) {
     try {
         const db = getFirebaseDb();
         // Limit to 20 for performance in a large table
-        const snapshot = await db.collection('fare_alerts').orderBy('created_at', 'asc').limit(20).get();
+        const snapshot = await db.collection('fare_alerts').limit(20).get();
 
         if (snapshot.empty) {
             return await sendMessage(chatId, "📭 No active fare alerts have been set by any users.");
@@ -1419,8 +1474,8 @@ async function handleShowFareAlerts(chatId) {
             const alert = doc.data();
             const date = alert.created_at ? alert.created_at.toDate().toLocaleString('en-IN') : 'N/A';
             alertList += `${index + 1}. <b>${alert.from}</b> → <b>${alert.to}</b> @ ${alert.time}\n`;
-            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
-            alertList += `  Set On: ${date}\n\n`;
+            alertList += `  Set by Chat ID: <code>${alert.chat_id}</code>\n`;
+            alertList += `  Set On: ${date}\n\n`;
         });
 
         alertList += "💡 To delete an alert, notify the user or manage the record in the database.";
@@ -1451,14 +1506,14 @@ async function handleUserProfile(chatId) {
             }
 
             const profileText = `👤 <b>Your Profile</b>\n\n` +
-                                     `<b>Name:</b> ${user.name || 'Not set'}\n` +
-                                     `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
-                                     `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
-                                     `<b>Aadhar:</b> ${user.aadhar || 'Not set'}` +
-                                     agentInfo + // NEW
-                                     `\n<b>Role:</b> ${user.role || 'user'}\n` +
-                                     `<b>Status:</b> ${user.status || 'N/A'}\n` +
-                                     `<b>Member since:</b> ${joinDate}`;
+                                           `<b>Name:</b> ${user.name || 'Not set'}\n` +
+                                           `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
+                                           `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
+                                           `<b>Aadhar:</b> ${user.aadhar || 'Not set'}` +
+                                           agentInfo + // NEW
+                                           `\n<b>Role:</b> ${user.role || 'user'}\n` +
+                                           `<b>Status:</b> ${user.status || 'N/A'}\n` +
+                                           `<b>Member since:</b> ${joinDate}`;
 
             await sendMessage(chatId, profileText, "HTML");
             return; // Explicit return
@@ -1515,7 +1570,7 @@ async function handleShowMyTrips(chatId) {
         buses.forEach(data => {
             const date = data.departure_time.split(' ')[0];
             tripList += `\n• <b>${data.bus_id}</b>: ${data.from} → ${data.to}\n`;
-            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
+            tripList += `  Status: <b>${data.status.toUpperCase()}</b> | Date: ${date}`;
         });
 
         const response = MESSAGES.manager_list_trips.replace('{tripList}', tripList);
@@ -2973,7 +3028,7 @@ async function handleSeatChangeRequest(chatId, text) {
     await sendMessage(chatId, response, "HTML");
 }
 
-// 7. handleCancellation
+// 7. handleCancellation (UPDATED FOR DYNAMIC REFUND)
 async function handleCancellation(chatId, text) {
     const match = text.match(/cancel booking\s+(BOOK\d+)/i);
     if (!match) return await sendMessage(chatId, "❌ Please specify Booking ID.\nExample: <pre>Cancel booking BOOK123456</pre>", "HTML");
@@ -2990,36 +3045,67 @@ async function handleCancellation(chatId, text) {
             return await sendMessage(chatId, `❌ Booking <b>${bookingId}</b> is not confirmed or does not exist.`);
         }
 
+        // --- Fetch Bus Info to get Departure Time (CRITICAL) ---
+        const busInfo = await getBusInfo(booking.busID);
+        if (!busInfo || !busInfo.departureDateTime) return await sendMessage(chatId, "❌ Bus details required for cancellation not found.");
+        // --- END CRITICAL FETCH ---
+
+        const departureDateTime = busInfo.departureDateTime;
+        const totalPaidPaise = booking.total_paid;
+
+        // --- NEW: Calculate Refund ---
+        const { refundPaise, refundPercent, adminFeePaise } = calculateRefund(departureDateTime, totalPaidPaise);
+
+        if (refundPaise < 0) {
+            return await sendMessage(chatId, `❌ Cannot cancel. Refund calculation error. Please contact support.`, "HTML");
+        }
+        
+        // --- END NEW: Calculate Refund ---
+
         // 1. Release Seats
         const seatsToRelease = booking.seats.map(s => s.seatNo);
         const batch = db.batch();
         seatsToRelease.forEach(seat => {
-            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat}`); // Fixed bug: s.seatNo -> seat
+            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat}`); 
             batch.update(seatRef, {
                 status: 'available',
                 booking_id: admin.firestore.FieldValue.delete(),
-                booked_to_destination: admin.firestore.FieldValue.delete(), // Clear destination
-                gender: admin.firestore.FieldValue.delete() // Clear gender for safety/privacy after cancellation
+                booked_to_destination: admin.firestore.FieldValue.delete(), 
+                gender: admin.firestore.FieldValue.delete() 
             });
         });
         await batch.commit();
 
-        // 2. Update Booking Status
+        // 2. Update Booking Status with Refund Details
+        const refundAmountINR = (refundPaise / 100).toFixed(2);
+        const adminFeeINR = (adminFeePaise / 100).toFixed(2);
+        const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
+
         await bookingRef.update({
             status: 'cancelled',
-            cancellation_time: admin.firestore.FieldValue.serverTimestamp()
+            cancellation_time: admin.firestore.FieldValue.serverTimestamp(),
+            refund_amount: refundPaise,
+            refund_percentage: refundPercent,
+            admin_fee: adminFeePaise
         });
 
         // 3. Send Notifications
-        const now = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
         await sendManagerNotification(booking.busID, 'CANCELLATION', {
             bookingId: bookingId,
             seats: seatsToRelease,
             dateTime: now
         });
 
-        await sendMessage(chatId, MESSAGES.booking_cancelled.replace('{bookingId}', bookingId).replace('{dateTime}', now), "HTML");
+        // 4. Send User Confirmation (Uses the updated message format)
+        await sendMessage(chatId, MESSAGES.booking_cancelled
+            .replace('{bookingId}', bookingId)
+            .replace('{refundAmount}', refundAmountINR)
+            .replace('{refundPercent}', refundPercent)
+            .replace('{adminFee}', adminFeeINR)
+            .replace('{dateTime}', now), "HTML");
+
     } catch (e) {
+        console.error("Error in handleCancellation:", e.message);
         await sendMessage(chatId, MESSAGES.db_error);
     }
 }
@@ -3431,8 +3517,8 @@ async function handleBookingInfo(chatId) {
 
 
             bookingList += `• <b>${booking.id}</b> (${booking.busID})\n`;
-            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
-            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}${bookedByTag}\n\n`;
+            bookingList += `  Route: ${booking.passengers[0].name} @ ${seats}\n`;
+            bookingList += `  Status: <b>${booking.status.toUpperCase()}</b> on ${date}${bookedByTag}\n\n`;
         }
 
         await sendMessage(chatId, bookingList + '💡 Use "Get ticket BOOKID" or "Check status BOOKID".', "HTML");
@@ -3510,6 +3596,7 @@ async function handleUserMessage(chatId, text, user) {
         // Handle in-flow commands
         if (state.state === 'AWAITING_BOARDING_POINT' || state.state === 'AWAITING_DESTINATION') { // NEW STATE ROUTING
             await handleBookingInput(chatId, text, state);
+            return;
         } else if (state.state === 'AWAITING_SEARCH_FROM' || state.state === 'AWAITING_SEARCH_TO' || state.state === 'AWAITING_SEARCH_DATE') {
              await handleSearchTextInput(chatId, text, state);
         } else if (state.state.startsWith('AWAITING_PASSENGER')) {
