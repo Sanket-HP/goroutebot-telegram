@@ -10,6 +10,30 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_API = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/`;
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET;
 
+// --- MOCK FINANCIAL & GST CONFIGURATION (NEW) ---
+const PLATFORM_FEE_INR = 50.00; // ₹50 fixed platform fee
+const BUS_GST_RATE = 0.05; // 5% GST on bus fare
+const PLATFORM_GST_RATE = 0.18; // 18% GST on platform fee
+const MAX_WALLET_REDEMPTION_PERCENT = 0.10; // Max 10% of booking can be paid via wallet
+
+// Mock GST Numbers for Invoicing
+const MOCK_GST_NUMBERS = {
+    PLATFORM: "GSTN07ABCDE1234F1Z1",
+    BUS_OWNER: "GSTN29FGHIJ5678G2Z2",
+    STATE_A: "Maharashtra",
+    STATE_B: "Karnataka",
+};
+
+// Cashback Rules (Percentage based on Base Fare * Seats)
+const CASHBACK_RULES = {
+    FIRST_BOOKING: 0.15,
+    FESTIVAL: 0.10, // Assuming a festival is active
+    REFERRAL: 0.10,
+    POPULAR_ROUTE: 0.05,
+    LOYAL_USER: 0.05,
+};
+// --- END NEW CONFIG ---
+
 // --- Mock Tracking URL (Conceptual Client Link) ---
 const MOCK_TRACKING_BASE_URL = "https://goroute-bot.web.app/";
 
@@ -35,9 +59,9 @@ const razorpay = new Razorpay({
 // Refunds are calculated based on time remaining until departure, offering transparent tiers.
 const REFUND_TIERS = {
     FULL_REFUND_HOURS: 12, // 100% refund (minus fee) if cancelled >= 12h before departure
-    HIGH_REFUND_HOURS: 4,  // 75% refund if cancelled >= 4h but < 12h
-    LOW_REFUND_HOURS: 0,   // 50% refund if cancelled < 4h (but before bus departs)
-    ADMIN_FEE_PERCENT: 1,  // 1% flat admin fee on any successful refund
+    HIGH_REFUND_HOURS: 4,  // 75% refund if cancelled >= 4h but < 12h
+    LOW_REFUND_HOURS: 0,   // 50% refund if cancelled < 4h (but before bus departs)
+    ADMIN_FEE_PERCENT: 1,  // 1% flat admin fee on any successful refund
 };
 
 
@@ -121,12 +145,12 @@ Select an option from the menu below to get started. You can also type commands 
     booking_passenger_prompt: "✅ Details saved for seat {seatNo}.\n\n<b>What's next?</b>",
 
     // Payment
-    payment_required: "💰 <b>Payment Required:</b> Total Amount: ₹{amount} INR.\n\n<b>Order ID: {orderId}</b>\n\n<a href='{paymentUrl}'>Click here to pay</a>\n\n<i>(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)</i>",
+    payment_required: "💰 <b>Payment Required:</b> Total Amount: ₹{amount} INR.\n\nOrder Details:\n{taxBreakdown}\n\n<b>Order ID: {orderId}</b>\n\n<a href='{paymentUrl}'>Click here to pay</a>\n\n<i>(Note: Your seat is held for 15 minutes. The ticket will be automatically sent upon successful payment.)</i>", // MODIFIED
     payment_awaiting: "⏳ Your seat is still locked while we await payment confirmation from Razorpay (Order ID: {orderId}).\n\nSelect an option below once payment is complete or if you wish to cancel.",
     payment_failed: "❌ Payment verification failed. Your seats have been released. Please try booking again.",
     session_cleared: "🧹 <b>Previous booking session cleared.</b> Your locked seats have been released.",
 
-    // Detailed Ticket Confirmation (UPDATED FOR BOARDING POINT)
+    // Detailed Ticket Confirmation (UPDATED FOR BOARDING POINT AND FINANCIALS)
     payment_confirmed_ticket: `✅ <b>Payment Confirmed & E-Ticket Issued!</b>
 
 🎫 <b>E-Ticket Details</b>
@@ -143,11 +167,13 @@ Name: {name}
 Phone: {phone}
 Booked By: {bookedBy}
 
-💰 <b>Transaction Details</b>
-Order ID: {orderId}
-Amount Paid: ₹{amount} INR
-Time: {dateTime}
-`,
+💰 <b>Transaction & Wallet Summary</b>
+Total Paid: <b>₹{amount} INR</b> (Order ID: {orderId})
+Cashback Earned: <b>₹{cashbackEarned}</b> (Expires {cashbackExpiryDate})
+Wallet Balance: <b>₹{walletBalance}</b>
+Next Trip Redemption Limit: <b>₹{nextTripLimit}</b>
+
+`, // MODIFIED MESSAGE
     // Passenger Self-Service Messages
     ticket_not_found: "❌ E-Ticket for Booking ID <b>{bookingId}</b> not found or not confirmed.",
     booking_status_info: "📋 <b>Booking Status - {bookingId}</b>\n\nBus: {busID}\nSeats: {seats}\nStatus: <b>{status}</b>\nBooked On: {date}",
@@ -441,7 +467,7 @@ async function getBusInfo(busID) {
             from: data.from,
             to: data.to,
             // Format is YYYY-MM-DD HH:MM
-            departureDateTime: data.departure_time, 
+            departureDateTime: data.departure_time, 
             date: data.departure_time.split(' ')[0],
             time: data.departure_time.split(' ')[1],
             boardingPoints: data.boarding_points || [],
@@ -573,7 +599,7 @@ function parseDurationToMs(durationString) {
  */
 function calculateRefund(departureDateTime, totalPaidPaise) {
     // Convert YYYY-MM-DD HH:MM to ISO format for reliable Date parsing
-    const departureTime = new Date(departureDateTime.replace(' ', 'T') + ':00'); 
+    const departureTime = new Date(departureDateTime.replace(' ', 'T') + ':00'); 
     const now = new Date();
     const timeToDepartureMs = departureTime.getTime() - now.getTime();
     const timeToDepartureHours = timeToDepartureMs / (1000 * 60 * 60);
@@ -597,7 +623,7 @@ function calculateRefund(departureDateTime, totalPaidPaise) {
     const adminFeePaise = (refundPercent > 0) ? Math.ceil(totalPaidPaise * (REFUND_TIERS.ADMIN_FEE_PERCENT / 100)) : 0;
 
     const finalRefundPaise = Math.max(0, baseRefundPaise - adminFeePaise);
-    
+     
     // Calculate the *actual* final refund percentage based on the final amount
     const actualRefundPercent = Math.floor((finalRefundPaise / totalPaidPaise) * 100);
 
@@ -825,7 +851,7 @@ async function runOspInventorySync() {
         try {
             // MOCKING EXTERNAL DATA PULL: Assume external API marks 1A, 1B, 2A, 2B as booked externally
             // This simulation runs once per execution, enforcing booked status on those seats.
-            const mockExternalBookedSeats = ['1A', '1B', '2A', '2B']; 
+            const mockExternalBookedSeats = ['1A', '1B', '2A', '2B']; 
             
             const batch = db.batch();
             let updatesCount = 0;
@@ -834,7 +860,7 @@ async function runOspInventorySync() {
             for (const seatNo of mockExternalBookedSeats) {
                 const seatRef = db.collection('seats').doc(`${busID}-${seatNo}`);
                 // Only mark as booked if they exist. U for Unknown/External Gender
-                batch.update(seatRef, { status: 'booked', booking_id: 'OSP_SYNC', gender: 'U' }).catch(() => {}); 
+                batch.update(seatRef, { status: 'booked', booking_id: 'OSP_SYNC', gender: 'U' }).catch(() => {}); 
                 updatesCount++;
             }
             
@@ -916,7 +942,8 @@ async function sendHelpMessage(chatId) {
              baseButtons.push(
                  [{ text: "🚌 Book a Bus", callback_data: "cb_book_bus" }],
                  [{ text: "🎫 My Bookings", callback_data: "cb_my_booking" }],
-                 [{ text: "🔔 Set Fare Alert", callback_data: "cb_fare_alert_prompt"}]
+                 [{ text: "🔔 Set Fare Alert", callback_data: "cb_fare_alert_prompt"}],
+                 [{ text: "💳 My Wallet", callback_data: "cb_my_wallet" }] // NEW WALLET BUTTON
              );
         }
 
@@ -979,7 +1006,7 @@ async function handleShowRevenue(chatId, text) {
             const bookingDate = data.created_at ? data.created_at.toDate().toISOString().split('T')[0] : null;
 
             if (bookingDate === targetDate) {
-                totalRevenue += data.total_paid || 0;
+                totalRevenue += data.platform_split?.total_platform_income_paise || data.total_paid || 0; // Use platform income if available
                 confirmedCount++;
             }
         });
@@ -1022,7 +1049,7 @@ async function handleAgentReport(chatId, text) {
 
             if (bookingDate === targetDate) {
                 const agentId = data.agent_id || 'DIRECT';
-                const revenue = data.total_paid || 0;
+                const revenue = data.total_paid || 0; // Show Gross for Agent Report
 
                 if (!report[agentId]) {
                     report[agentId] = { count: 0, revenue: 0, name: 'Direct Customer' };
@@ -1079,7 +1106,7 @@ async function handleAgentReport(chatId, text) {
 }
 
 
-// --- MANAGER/OWNER: DELETE BUS (NEW) ---
+// --- OWNER/MANAGER: DELETE BUS (NEW) ---
 async function handleDeleteBus(chatId, text) {
     const userRole = await getUserRole(chatId);
     if (userRole !== 'manager' && userRole !== 'owner') return await sendMessage(chatId, MESSAGES.owner_permission_denied);
@@ -1489,6 +1516,37 @@ async function handleShowFareAlerts(chatId) {
     }
 }
 
+// --- PASSENGER: MY WALLET (NEW) ---
+async function handleMyWallet(chatId) {
+    try {
+        const db = getFirebaseDb();
+        const userDoc = await db.collection('users').doc(String(chatId)).get();
+
+        if (!userDoc.exists) return await sendMessage(chatId, MESSAGES.user_not_found);
+
+        const userData = userDoc.data();
+        const balance = (userData.wallet_balance || 0).toFixed(2);
+        const lastExpiry = userData.wallet_expiry ? userData.wallet_expiry.toDate().toLocaleDateString('en-IN') : 'N/A';
+
+        // Calculate next redemption limit (Mocking next booking amount as ₹1200 for calculation example)
+        const mockNextBookingAmount = 1200;
+        const nextTripLimit = Math.min(userData.wallet_balance || 0, mockNextBookingAmount * MAX_WALLET_REDEMPTION_PERCENT);
+
+        let walletMessage = `💳 <b>Your Cashback Wallet</b>\n\n` +
+            `💰 **Current Balance:** <b>₹${balance} INR</b>\n` +
+            `🗓️ **Last Expiry Date:** ${lastExpiry}\n` +
+            `💸 **Next Trip Redemption Limit:** You can use up to **₹${nextTripLimit.toFixed(2)}** on your next booking (10% limit).\n\n` +
+            `<i>Tip: Cashback is automatically applied at the payment stage.</i>`;
+
+        // Future improvement: Show recent transactions from the wallet_transactions collection
+
+        await sendMessage(chatId, walletMessage, "HTML");
+    } catch (e) {
+        console.error("Error fetching wallet data:", e.message);
+        await sendMessage(chatId, MESSAGES.db_error);
+    }
+}
+
 
 // --- handleUserProfile definition ---
 async function handleUserProfile(chatId) {
@@ -1499,6 +1557,7 @@ async function handleUserProfile(chatId) {
         if (doc.exists) {
             const user = doc.data();
             const joinDate = user.join_date ? user.join_date.toDate().toLocaleDateString('en-IN') : 'N/A';
+            const balance = (user.wallet_balance || 0).toFixed(2); // NEW WALLET FIELD
 
             let agentInfo = '';
             if (user.role === 'agent' && user.agent_id) {
@@ -1506,14 +1565,15 @@ async function handleUserProfile(chatId) {
             }
 
             const profileText = `👤 <b>Your Profile</b>\n\n` +
-                                           `<b>Name:</b> ${user.name || 'Not set'}\n` +
-                                           `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
-                                           `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
-                                           `<b>Aadhar:</b> ${user.aadhar || 'Not set'}` +
-                                           agentInfo + // NEW
-                                           `\n<b>Role:</b> ${user.role || 'user'}\n` +
-                                           `<b>Status:</b> ${user.status || 'N/A'}\n` +
-                                           `<b>Member since:</b> ${joinDate}`;
+                                        `<b>Name:</b> ${user.name || 'Not set'}\n` +
+                                        `<b>Chat ID:</b> <code>${user.chat_id}</code>\n` +
+                                        `<b>Phone:</b> ${user.phone || 'Not set'}\n` +
+                                        `<b>Aadhar:</b> ${user.aadhar || 'Not set'}` +
+                                        agentInfo + // NEW
+                                        `\n<b>Role:</b> ${user.role || 'user'}\n` +
+                                        `<b>Wallet Balance:</b> <b>₹${balance}</b>\n` + // NEW WALLET FIELD
+                                        `<b>Status:</b> ${user.status || 'N/A'}\n` +
+                                        `<b>Member since:</b> ${joinDate}`;
 
             await sendMessage(chatId, profileText, "HTML");
             return; // Explicit return
@@ -1853,7 +1913,7 @@ async function handleBookSeatCallback(chatId, callbackData) {
     if (!busInfo) return await sendMessage(chatId, "❌ Bus details unavailable for booking.");
 
     // --- DYNAMIC PRICING CALCULATION ---
-    const basePrice = busInfo.price; 
+    const basePrice = busInfo.price; 
     let finalPrice = basePrice;
     const departureDate = new Date(busInfo.date);
     const today = new Date();
@@ -1873,9 +1933,9 @@ async function handleBookSeatCallback(chatId, callbackData) {
         seatNo,
         busTo: busInfo.to,
         destination: null,
-        boardingPoint: null, 
+        boardingPoint: null, 
         passengers: [],
-        finalPrice: parseFloat(finalPrice.toFixed(2)) // Store calculated price
+        finalPrice: parseFloat(finalPrice.toFixed(2)) // Store calculated base price per seat (adjusted dynamically)
     };
 
     await saveAppState(chatId, 'AWAITING_BOARDING_POINT', bookingData); // NEW STATE
@@ -2658,7 +2718,12 @@ async function handleRoleSelection(chatId, user, callbackData) {
             phone: '', aadhar: '',
             status: finalRole === 'agent_pending' ? 'awaiting_agent_login' : 'pending_details',
             role: finalRole, lang: 'en',
-            join_date: admin.firestore.FieldValue.serverTimestamp()
+            join_date: admin.firestore.FieldValue.serverTimestamp(),
+            // NEW WALLET FIELDS
+            wallet_balance: 0.00,
+            wallet_expiry: null,
+            total_trips: 0,
+            is_first_booking: true // For cashback calculation
         };
         await db.collection('users').doc(String(chatId)).set(newUser);
 
@@ -2874,7 +2939,7 @@ async function handleSearchTextInput(chatId, text, state) {
             return await sendMessage(chatId, MESSAGES.search_route_not_found.replace('{city}', city), "HTML");
         }
 
-        keyboard = null; 
+        keyboard = null; 
         nextState = 'AWAITING_SEARCH_TO';
         response = MESSAGES.search_to;
 
@@ -2957,6 +3022,8 @@ async function handleGetTicket(chatId, text) {
         // Retrieve new fields
         const passengerDestination = booking.seats[0].booked_to_destination || busInfo.to;
         const boardingPoint = booking.boarding_point || 'N/A';
+        const walletData = await getUserWalletData(chatId); // NEW: Get live wallet data
+        const nextTripLimit = Math.min(walletData.balance, 1200 * MAX_WALLET_REDEMPTION_PERCENT); // Mock next booking amount as 1200 for redemption calculation
 
         const response = MESSAGES.payment_confirmed_ticket
             .replace('{busName}', busInfo.busName || 'N/A')
@@ -2973,7 +3040,12 @@ async function handleGetTicket(chatId, text) {
             .replace('{bookedBy}', bookedByDisplay) // NEW POPULATION
             .replace('{orderId}', booking.razorpay_order_id)
             .replace('{amount}', (booking.total_paid / 100).toFixed(2))
-            .replace('{dateTime}', booking.created_at.toDate().toLocaleString('en-IN'));
+            .replace('{dateTime}', booking.created_at.toDate().toLocaleString('en-IN'))
+            // NEW WALLET FIELDS
+            .replace('{cashbackEarned}', (booking.cashback_details?.earned_amount || 0).toFixed(2))
+            .replace('{cashbackExpiryDate}', booking.cashback_details?.expiry_date?.toDate().toLocaleDateString('en-IN') || 'N/A')
+            .replace('{walletBalance}', walletData.balance.toFixed(2))
+            .replace('{nextTripLimit}', nextTripLimit.toFixed(2));
 
         await sendMessage(chatId, response, "HTML");
     } catch (e) {
@@ -3066,12 +3138,12 @@ async function handleCancellation(chatId, text) {
         const seatsToRelease = booking.seats.map(s => s.seatNo);
         const batch = db.batch();
         seatsToRelease.forEach(seat => {
-            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat}`); 
+            const seatRef = db.collection('seats').doc(`${booking.busID}-${seat}`); 
             batch.update(seatRef, {
                 status: 'available',
                 booking_id: admin.firestore.FieldValue.delete(),
-                booked_to_destination: admin.firestore.FieldValue.delete(), 
-                gender: admin.firestore.FieldValue.delete() 
+                booked_to_destination: admin.firestore.FieldValue.delete(), 
+                gender: admin.firestore.FieldValue.delete() 
             });
         });
         await batch.commit();
@@ -3249,29 +3321,360 @@ async function handleAddPassengerCallback(chatId) {
     await sendMessage(chatId, MESSAGES.feature_wip + " Multi-seat selection coming soon! Please complete your current booking.", "HTML");
 }
 
+/* --------------------- NEW FINANCIAL/WALLET LOGIC ---------------------- */
+
+/**
+ * Mocks state retrieval based on city names for Intra/Inter-state GST logic.
+ * @param {string} from - Origin city
+ * @param {string} to - Destination city
+ * @returns {{type: 'CGST+SGST'|'IGST', rate: number}}
+ */
+function getRouteGSTType(from, to) {
+    // Mocking state identification. In reality, this would use a geographical database.
+    const stateA = MOCK_GST_NUMBERS.STATE_A.toLowerCase();
+    const stateB = MOCK_GST_NUMBERS.STATE_B.toLowerCase();
+
+    // Simple heuristic for demonstration: if cities are from the same mock state list, assume same state
+    const isSameState = (
+        MOCK_LOCATIONS.map(l => l.toLowerCase()).some(l => from.toLowerCase().includes(l)) &&
+        MOCK_LOCATIONS.map(l => l.toLowerCase()).some(l => to.toLowerCase().includes(l))
+    );
+    
+    // For robust mocking: We assume Mumbai/Pune (State A) to be intra-state, and Mumbai to Delhi/Chennai (not in list) to be inter-state.
+    const fromState = from.toLowerCase().includes('mumbai') || from.toLowerCase().includes('pune') ? stateA : stateB;
+    const toState = to.toLowerCase().includes('mumbai') || to.toLowerCase().includes('pune') ? stateA : stateB;
+
+    if (fromState === toState) {
+        return { type: 'CGST+SGST', rate: PLATFORM_GST_RATE }; // 18% total
+    } else {
+        return { type: 'IGST', rate: PLATFORM_GST_RATE }; // 18% total
+    }
+}
+
+/**
+ * Calculates the full fare breakdown based on quantity and route.
+ * @param {number} baseFarePerSeat - Dynamic price per seat (INR)
+ * @param {number} passengerCount
+ * @param {string} from - Origin city
+ * @param {string} to - Destination city
+ * @param {number} walletRedemptionINR - Amount user redeems from wallet (INR)
+ * @returns {object} Full financial breakdown (all amounts in INR, not paise)
+ */
+function calculateFareAndGST(baseFarePerSeat, passengerCount, from, to, walletRedemptionINR = 0) {
+    // 1. Base Calculations
+    const totalBaseFare = baseFarePerSeat * passengerCount;
+    const totalPlatformFee = PLATFORM_FEE_INR * passengerCount;
+
+    // 2. GST Calculations
+    const busGST = totalBaseFare * BUS_GST_RATE; // 5% on bus fare
+    
+    const gstType = getRouteGSTType(from, to);
+    const platformGST = totalPlatformFee * PLATFORM_GST_RATE; // 18% on platform fee
+
+    let platformGSTBreakdown = {
+        type: gstType.type,
+        rate: PLATFORM_GST_RATE * 100, // 18
+        amount: platformGST,
+    };
+
+    if (gstType.type === 'CGST+SGST') {
+        platformGSTBreakdown.CGST = platformGST / 2; // 9%
+        platformGSTBreakdown.SGST = platformGST / 2; // 9%
+    } else {
+        platformGSTBreakdown.IGST = platformGST; // 18%
+    }
+
+    // 3. Totals
+    const grossTotal = totalBaseFare + busGST + totalPlatformFee + platformGST;
+    const netPayable = grossTotal - walletRedemptionINR;
+
+    // 4. Split (For audit/remittance later)
+    const split = {
+        busOwner: {
+            base: totalBaseFare,
+            gst: busGST,
+            remittance_total: totalBaseFare + busGST,
+        },
+        platform: {
+            fee: totalPlatformFee,
+            gst: platformGST,
+            total_platform_income: totalPlatformFee, // Revenue portion
+            total_platform_gst: platformGST, // Remittance portion
+            total_platform_income_paise: Math.round(totalPlatformFee * 100) // For Revenue Report
+        }
+    };
+
+    return {
+        totalBaseFare: totalBaseFare,
+        busGST: busGST,
+        totalPlatformFee: totalPlatformFee,
+        platformGST: platformGST,
+        platformGSTBreakdown: platformGSTBreakdown,
+        grossTotal: grossTotal,
+        walletRedemption: walletRedemptionINR,
+        netPayable: Math.max(0, netPayable),
+        split: split,
+    };
+}
+
+/**
+ * Calculates the best applicable cashback amount.
+ * @param {number} totalBaseFare - Total Base Fare (INR)
+ * @param {object} userData - User document data
+ * @returns {{amount: number, reason: string}}
+ */
+function calculateCashback(totalBaseFare, userData) {
+    let bestCashback = 0;
+    let reason = 'N/A';
+    const totalBookings = userData.total_trips || 0;
+
+    // 1. First Booking (Highest Priority)
+    if (userData.is_first_booking) {
+        bestCashback = totalBaseFare * CASHBACK_RULES.FIRST_BOOKING;
+        reason = 'First Booking (15%)';
+    }
+
+    // 2. Festival (Mocking a festival status)
+    if (totalBaseFare * CASHBACK_RULES.FESTIVAL > bestCashback) {
+        bestCashback = totalBaseFare * CASHBACK_RULES.FESTIVAL;
+        reason = 'Festival Offer (10%)';
+    }
+
+    // 3. Referral (Mocking: Assume the user was referred)
+    if (userData.referred_by && totalBaseFare * CASHBACK_RULES.REFERRAL > bestCashback) {
+        bestCashback = totalBaseFare * CASHBACK_RULES.REFERRAL;
+        reason = 'Referral Bonus (10%)';
+    }
+
+    // 4. Loyal User (>5 trips)
+    if (totalBookings >= 5 && totalBaseFare * CASHBACK_RULES.LOYAL_USER > bestCashback) {
+        bestCashback = totalBaseFare * CASHBACK_RULES.LOYAL_USER;
+        reason = 'Loyal User Bonus (5%)';
+    }
+
+    // 5. Popular Route (Mocking: Assume the route is popular if price > 1000)
+    if (totalBaseFare > 1000 && totalBaseFare * CASHBACK_RULES.POPULAR_ROUTE > bestCashback) {
+        bestCashback = totalBaseFare * CASHBACK_RULES.POPULAR_ROUTE;
+        reason = 'Popular Route Bonus (5%)';
+    }
+
+    // Ensure amount is non-negative and rounded to 2 decimal places
+    const finalAmount = Math.max(0, parseFloat(bestCashback.toFixed(2)));
+
+    return { amount: finalAmount, reason };
+}
+
+/**
+ * Determines max possible wallet redemption and applies it.
+ * @param {number} totalFareBeforeRedemption - The total gross amount due (Base + Fees + GST)
+ * @param {number} walletBalance - Current user wallet balance (INR)
+ * @returns {{redemptionAmount: number, newBalance: number}}
+ */
+function applyWalletRedemption(totalFareBeforeRedemption, walletBalance) {
+    // 1. Calculate max redemption based on percentage of total fare
+    const maxRedemptionByPercent = totalFareBeforeRedemption * MAX_WALLET_REDEMPTION_PERCENT;
+
+    // 2. Redemption is limited by the lesser of the max percentage or the available balance
+    const redemptionAmount = Math.min(maxRedemptionByPercent, walletBalance);
+
+    // 3. Calculate new balance
+    const newBalance = walletBalance - redemptionAmount;
+
+    return {
+        redemptionAmount: parseFloat(redemptionAmount.toFixed(2)),
+        newBalance: parseFloat(newBalance.toFixed(2))
+    };
+}
+
+/**
+ * Generates the two required JSON invoice structures.
+ * @param {string} bookingId
+ * @param {object} breakdown - The output from calculateFareAndGST
+ * @param {string} userName
+ * @returns {{ownerInvoice: object, platformInvoice: object}}
+ */
+function generateInvoices(bookingId, breakdown, userName) {
+    const ownerSplit = breakdown.split.busOwner;
+    const platformSplit = breakdown.split.platform;
+    const gstType = breakdown.platformGSTBreakdown.type;
+
+    const ownerInvoice = {
+        invoice_id: `${bookingId}-BUS`,
+        date: new Date().toISOString().split('T')[0],
+        seller: {
+            name: "Bus Owner Travels",
+            gstin: MOCK_GST_NUMBERS.BUS_OWNER,
+        },
+        buyer: {
+            name: userName,
+            gstin: 'URP_Consumer', // Unregistered Person
+        },
+        items: [{
+            description: "Bus Fare (Seat)",
+            taxable_value: ownerSplit.base,
+            gst_rate: BUS_GST_RATE * 100, // 5
+            gst_amount: ownerSplit.gst,
+        }],
+        total_amount: ownerSplit.remittance_total,
+        total_tax: ownerSplit.gst,
+    };
+
+    const platformInvoice = {
+        invoice_id: `${bookingId}-PLATFORM`,
+        date: new Date().toISOString().split('T')[0],
+        seller: {
+            name: "GoRoute Platform",
+            gstin: MOCK_GST_NUMBERS.PLATFORM,
+        },
+        buyer: {
+            name: userName,
+            gstin: 'URP_Consumer',
+        },
+        items: [{
+            description: "Platform Fee (Convenience)",
+            taxable_value: platformSplit.fee,
+            gst_rate: PLATFORM_GST_RATE * 100, // 18
+            ...breakdown.platformGSTBreakdown
+        }],
+        total_amount: platformSplit.fee + platformSplit.gst,
+        total_tax: platformSplit.gst,
+    };
+
+    return { ownerInvoice, platformInvoice };
+}
+
+/**
+ * Fetches user wallet balance and expiry date (INR).
+ * @param {string} chatId
+ * @returns {Promise<{balance: number, expiry: Date|null, totalTrips: number, isFirstBooking: boolean}>}
+ */
+async function getUserWalletData(chatId) {
+    const db = getFirebaseDb();
+    const userDoc = await db.collection('users').doc(String(chatId)).get();
+    const userData = userDoc.exists ? userDoc.data() : {};
+
+    return {
+        balance: userData.wallet_balance || 0,
+        expiry: userData.wallet_expiry ? userData.wallet_expiry.toDate() : null,
+        totalTrips: userData.total_trips || 0,
+        isFirstBooking: userData.is_first_booking || true,
+        referred_by: userData.referred_by || null,
+    };
+}
+
+/* --------------------- CRON JOB: Wallet Expiry ---------------------- */
+
+/**
+ * Daily cron job to check and clear expired cashback.
+ */
+async function expireWallets() {
+    const db = getFirebaseDb();
+    const batch = db.batch();
+    const now = admin.firestore.Timestamp.now();
+    let expiredAmountTotal = 0;
+    let expiredUsersCount = 0;
+
+    console.log("[CRON] Starting wallet expiry check...");
+
+    // 1. Find users whose wallet_expiry is in the past, but balance > 0
+    const usersSnapshot = await db.collection('users')
+        .where('wallet_expiry', '<', now)
+        .where('wallet_balance', '>', 0)
+        .get();
+
+    usersSnapshot.forEach(doc => {
+        const userData = doc.data();
+        const chatId = doc.id;
+        const expiredAmount = userData.wallet_balance;
+
+        expiredAmountTotal += expiredAmount;
+        expiredUsersCount++;
+
+        const userRef = doc.ref;
+
+        // 2. Clear balance and expiry date from user document
+        batch.update(userRef, {
+            wallet_balance: 0.00,
+            wallet_expiry: admin.firestore.FieldValue.delete(),
+        });
+
+        // 3. Log transaction to 'wallet_transactions' (Type: EXPIRY, Debit)
+        const transactionRef = db.collection('wallet_transactions').doc();
+        batch.set(transactionRef, {
+            chat_id: chatId,
+            type: 'EXPIRY',
+            amount: expiredAmount,
+            timestamp: now,
+            details: 'Cashback expired (platform profit).'
+        });
+        
+        // 4. Log the expired amount as platform profit (optional audit log)
+        db.collection('platform_audit_log').add({
+             type: 'EXPIRED_CASHBACK_PROFIT',
+             amount_paise: Math.round(expiredAmount * 100),
+             timestamp: now
+        }).catch(e => console.error("Failed to log expiry profit:", e.message));
+    });
+
+    if (expiredUsersCount > 0) {
+        await batch.commit();
+        console.log(`[CRON SUCCESS] Expired wallets for ${expiredUsersCount} users. Total expired: ₹${expiredAmountTotal.toFixed(2)}.`);
+    } else {
+        console.log("[CRON] No wallets expired today.");
+    }
+    return { expiredUsersCount, expiredAmountTotal };
+}
+
+/* --------------------- END NEW FINANCIAL/WALLET LOGIC ---------------------- */
+
+
 // 13. createPaymentOrder (UPDATED to use DYNAMIC PRICE from state)
 async function createPaymentOrder(chatId, bookingData) {
     try {
         const db = getFirebaseDb();
         
-        // Use finalPrice from state data, which includes dynamic adjustments.
-        const pricePerSeat = bookingData.finalPrice || 0; 
+        // 1. Get Base Financial Data
+        const pricePerSeat = bookingData.finalPrice || 0; // Dynamic price per seat (INR)
         if (pricePerSeat === 0) return await sendMessage(chatId, "❌ Booking price information is missing. Please restart booking.", "HTML");
 
-        const amount = pricePerSeat * bookingData.passengers.length * 100; // Amount in paise
+        const passengerCount = bookingData.passengers.length;
+        const totalBaseFareGross = pricePerSeat * passengerCount + (PLATFORM_FEE_INR * passengerCount); // Base cost + Platform Fee * before any tax
 
-        // Get Agent ID if the current user is an Agent
-        const agentId = await getAgentIdByChatId(chatId);
+        // 2. Fetch Wallet Data and Calculate Redemption
+        const walletData = await getUserWalletData(chatId);
+        const { redemptionAmount, newBalance: walletAfterRedemption } = applyWalletRedemption(totalBaseFareGross, walletData.balance);
 
-        // 1. Create Razorpay Order
+        // 3. Calculate Final Tax and Payable Amount
+        const breakdown = calculateFareAndGST(
+            pricePerSeat, 
+            passengerCount, 
+            bookingData.from, 
+            bookingData.to, 
+            redemptionAmount // Wallet deduction applied here
+        );
+        
+        const amountPaise = Math.round(breakdown.netPayable * 100); // Amount to send to Razorpay
+        
+        // 4. Prepare Tax Breakdown Display for User
+        const taxBreakdownDisplay = `Seats: ₹${breakdown.totalBaseFare.toFixed(2)}\n` +
+                                   `Bus GST (5%): ₹${breakdown.busGST.toFixed(2)}\n` +
+                                   `Platform Fee: ₹${breakdown.totalPlatformFee.toFixed(2)}\n` +
+                                   `${breakdown.platformGSTBreakdown.type} (18%): ₹${breakdown.platformGST.toFixed(2)}\n` +
+                                   (redemptionAmount > 0 ? `Wallet Redemption: -₹${redemptionAmount.toFixed(2)}\n` : ``) +
+                                   `Total Payable: <b>₹${breakdown.netPayable.toFixed(2)}</b>`;
+
+
+        // 5. Create Razorpay Order
         const order = await razorpay.orders.create({
-            amount: amount,
+            amount: amountPaise,
             currency: "INR",
             receipt: `rcpt_${chatId}_${Date.now()}`,
             notes: {
                 chatId: String(chatId),
                 busID: bookingData.busID,
-                agentId: agentId || 'DIRECT' // Store agent ID in Razorpay notes
+                // Store financial breakdown in notes for reliable retrieval in webhook
+                breakdown: JSON.stringify(breakdown), 
+                redemptionAmount: redemptionAmount,
             }
         });
 
@@ -3280,24 +3683,28 @@ async function createPaymentOrder(chatId, bookingData) {
              throw new Error("Razorpay returned an invalid or empty order object. Check API keys and permissions.");
         }
 
-        // 2. Save payment session data
+        // 6. Save payment session data
         const uniqueBookingId = `BOOK${Date.now().toString().slice(-6)}`;
         const userDoc = await db.collection('users').doc(String(chatId)).get();
         const userData = userDoc.data() || {};
+        const agentId = await getAgentIdByChatId(chatId);
 
+        // Store the FULL financial breakdown and the wallet transaction details
         const finalBookingData = {
             chat_id: String(chatId),
             busID: bookingData.busID,
-            boarding_point: bookingData.boardingPoint, // NEW FIELD ADDED
-            agent_id: agentId || null, // NEW FIELD ADDED
-            // Seat object now includes the passenger's drop-off destination
+            boarding_point: bookingData.boardingPoint,
+            agent_id: agentId || null,
             seats: bookingData.passengers.map(p => ({ seatNo: p.seat, gender: p.gender, booked_to_destination: bookingData.destination })),
             passengers: bookingData.passengers,
-            total_paid: amount,
+            total_paid: amountPaise, // Final amount paid to Razorpay (in paise)
+            gross_total: Math.round(breakdown.grossTotal * 100), // Gross amount (before redemption)
             razorpay_order_id: order.id,
             status: 'pending_payment',
             phone: userData.phone || 'N/A',
-            bookingId: uniqueBookingId
+            bookingId: uniqueBookingId,
+            financial_breakdown: breakdown, // Store the full breakdown object
+            wallet_redemption: redemptionAmount, // Amount redeemed from wallet
         };
 
         await db.collection('payment_sessions').doc(order.id).set({ booking: finalBookingData });
@@ -3312,7 +3719,8 @@ async function createPaymentOrder(chatId, bookingData) {
         const paymentUrl = `https://rzp.io/i/${order.id}`; // Simplified payment link
 
         const response = MESSAGES.payment_required
-            .replace('{amount}', (amount / 100).toFixed(2))
+            .replace('{amount}', breakdown.netPayable.toFixed(2)) // Use net payable in message
+            .replace('{taxBreakdown}', taxBreakdownDisplay) // NEW BREAKDOWN
             .replace('{orderId}', order.id)
             .replace('{paymentUrl}', paymentUrl);
 
@@ -3353,6 +3761,7 @@ async function handlePaymentVerification(chatId, stateData) {
 
         // --- TEST BYPASS IMPLEMENTATION (Immediate Success Simulation) ---
         console.log(`[TEST BYPASS] Simulating successful payment for Order ID: ${orderId}`);
+        // Ensure to pass the chatId so the user state can be cleared and the final message sent
         await commitFinalBookingBatch(chatId, bookingData);
         // commitFinalBookingBatch handles clearing the user state, updating seats, and sending the ticket message.
         // --- END TEST BYPASS ---
@@ -3392,7 +3801,64 @@ async function commitFinalBookingBatch(chatId, bookingData) {
     const nowReadable = new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' });
 
     try {
-        // 1. Update Seats
+        // --- NEW: FINANCIAL & WALLET LOGIC ---
+        const breakdown = bookingData.financial_breakdown;
+        const totalBaseFareINR = breakdown.totalBaseFare;
+        const userName = bookingData.passengers[0].name;
+
+        // 1. Cashback Calculation
+        const userWalletData = await getUserWalletData(bookingData.chat_id);
+        const { amount: cashbackEarned, reason: cashbackReason } = calculateCashback(totalBaseFareINR, userWalletData);
+        
+        // Calculate new wallet balance after redemption (if any) and credit (if any)
+        const walletRedemption = bookingData.wallet_redemption || 0.00;
+        const walletBalanceBeforeCredit = userWalletData.balance - walletRedemption;
+
+        const newWalletBalance = walletBalanceBeforeCredit + cashbackEarned;
+
+        // Calculate 30-day expiry date
+        const expiryDate = new Date();
+        expiryDate.setDate(expiryDate.getDate() + 30);
+
+        // 2. Invoice Generation
+        const { ownerInvoice, platformInvoice } = generateInvoices(bookingId, breakdown, userName);
+        
+        // 3. User Wallet Update (Transaction Log and User Profile)
+        const userRef = db.collection('users').doc(String(bookingData.chat_id));
+        
+        const userUpdates = {
+            wallet_balance: newWalletBalance,
+            wallet_expiry: admin.firestore.Timestamp.fromDate(expiryDate),
+            total_trips: admin.firestore.FieldValue.increment(1),
+            is_first_booking: false // Mark as non-first booking
+        };
+        batch.update(userRef, userUpdates);
+
+        if (cashbackEarned > 0) {
+            // Log cashback credit transaction
+            batch.set(db.collection('wallet_transactions').doc(), {
+                chat_id: bookingData.chat_id,
+                type: 'CREDIT',
+                amount: cashbackEarned,
+                timestamp: now,
+                details: `Cashback earned: ${cashbackReason}`,
+                expiry_date: admin.firestore.Timestamp.fromDate(expiryDate),
+            });
+        }
+        if (walletRedemption > 0) {
+            // Log redemption debit transaction
+            batch.set(db.collection('wallet_transactions').doc(), {
+                chat_id: bookingData.chat_id,
+                type: 'DEBIT',
+                amount: walletRedemption * -1,
+                timestamp: now,
+                details: `Redemption on Booking ${bookingId}`,
+            });
+        }
+        // --- END NEW: FINANCIAL & WALLET LOGIC ---
+
+
+        // 4. Update Seats (Existing Logic)
         bookingData.seats.forEach(seat => {
             const seatRef = db.collection('seats').doc(`${bookingData.busID}-${seat.seatNo}`);
             batch.update(seatRef, {
@@ -3403,25 +3869,36 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             });
         });
 
-        // 2. Create Final Booking Record
+        // 5. Create Final Booking Record (Extended)
         const bookingRef = db.collection('bookings').doc(bookingId);
         batch.set(bookingRef, {
             ...bookingData,
             status: 'confirmed',
-            created_at: now
+            created_at: now,
+            // New compliance data
+            financial_split: breakdown.split,
+            cashback_details: {
+                earned_amount: cashbackEarned,
+                reason: cashbackReason,
+                expiry_date: admin.firestore.Timestamp.fromDate(expiryDate),
+            },
+            invoices: {
+                owner_invoice_json: ownerInvoice,
+                platform_invoice_json: platformInvoice,
+            }
         });
 
-        // 3. Delete Payment Session
+        // 6. Delete Payment Session (Existing Logic)
         batch.delete(db.collection('payment_sessions').doc(orderId));
 
-        // 4. Clear App State (Only if triggered by manual user verification)
+        // 7. Clear App State (Only if triggered by manual user verification) (Existing Logic)
         if (chatId) {
             batch.delete(db.collection('user_state').doc(String(chatId)));
         }
 
         await batch.commit();
 
-        // 5. Send Notifications (Outside of batch)
+        // 8. Send Notifications (Outside of batch)
         const busInfo = await getBusInfo(bookingData.busID);
         const seatsList = bookingData.seats.map(s => s.seatNo).join(', ');
         const passengerDestination = bookingData.seats[0].booked_to_destination || busInfo.to;
@@ -3434,7 +3911,10 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             const agentDoc = await db.collection('agents').doc(agentId).get();
             bookedByDisplay = agentDoc.exists ? `Agent ${agentDoc.data().name} (${agentId})` : `Agent ${agentId}`;
         }
-
+        
+        // Calculate the redemption limit for the *next* trip
+        // Using the newly credited balance for the calculation
+        const nextTripLimit = Math.min(newWalletBalance, 1200 * MAX_WALLET_REDEMPTION_PERCENT); // Mock next booking amount as 1200
 
         const response = MESSAGES.payment_confirmed_ticket
             .replace('{busName}', busInfo.busName || 'N/A')
@@ -3451,7 +3931,12 @@ async function commitFinalBookingBatch(chatId, bookingData) {
             .replace('{bookedBy}', bookedByDisplay) // NEW POPULATION
             .replace('{orderId}', orderId)
             .replace('{amount}', (bookingData.total_paid / 100).toFixed(2))
-            .replace('{dateTime}', nowReadable);
+            .replace('{dateTime}', nowReadable)
+            // NEW WALLET FIELDS
+            .replace('{cashbackEarned}', cashbackEarned.toFixed(2))
+            .replace('{cashbackExpiryDate}', expiryDate.toLocaleDateString('en-IN'))
+            .replace('{walletBalance}', newWalletBalance.toFixed(2))
+            .replace('{nextTripLimit}', nextTripLimit.toFixed(2));
 
         if (chatId) {
              await sendMessage(chatId, response, "HTML");
@@ -3728,6 +4213,9 @@ async function handleUserMessage(chatId, text, user) {
     else if (textLower.startsWith('show live location')) {
         await handleShowLiveLocation(chatId, text);
     }
+    else if (textLower === 'my wallet') { // NEW WALLET COMMAND
+        await handleMyWallet(chatId);
+    }
     else {
         await sendMessage(chatId, MESSAGES.unknown_command, "HTML");
     }
@@ -3799,6 +4287,8 @@ app.post('/api/webhook', async (req, res) => {
                 await handleBookingInfo(chatId);
             } else if (callbackData === 'cb_my_profile') {
                 await handleUserProfile(chatId);
+            } else if (callbackData === 'cb_my_wallet') { // NEW WALLET CALLBACK
+                await handleMyWallet(chatId);
             } else if (callbackData === 'cb_add_bus_manager') {
                 await handleManagerAddBus(chatId);
             } else if (callbackData === 'cb_inventory_sync') {
@@ -3896,6 +4386,7 @@ app.post('/api/razorpay/webhook', async (req, res) => {
 
             if (event === 'order.paid') {
                 // Pass null for chatId since this is a webhook, not a user interaction
+                // The bookingData already contains the full financial_breakdown from createPaymentOrder
                 await commitFinalBookingBatch(null, bookingData);
             } else if (event === 'payment.failed') {
                 // Unlock seats uses the seat array from the booking data.
@@ -3923,3 +4414,4 @@ module.exports = app;
 module.exports.sendLiveLocationUpdates = sendLiveLocationUpdates;
 module.exports.sendFareAlertNotifications = sendFareAlertNotifications;
 module.exports.runOspInventorySync = runOspInventorySync;
+module.exports.expireWallets = expireWallets; // NEW CRON EXPORT
